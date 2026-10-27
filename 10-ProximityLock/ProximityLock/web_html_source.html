@@ -636,9 +636,12 @@
             <span>电脑登录密码 (仅在开启自动解锁时使用)</span>
             <span id="pwdStatusTip" style="font-size:11px; color:var(--accent-green);">读取中...</span>
           </div>
-          <div style="position:relative; display:flex; align-items:center;">
-            <input type="password" class="input-text" id="unlockPwdInput" placeholder="输入电脑登录密码，免密系统请留空" style="padding-right:42px;">
-            <button type="button" onclick="togglePasswordVisibility()" style="position:absolute; right:8px; background:none; border:none; color:var(--text-sub); cursor:pointer; font-size:16px; padding:4px;" title="显示/隐藏密码">👁️</button>
+          <div style="position:relative; display:flex; align-items:center; gap:8px;">
+            <div style="position:relative; flex:1; display:flex; align-items:center;">
+              <input type="password" class="input-text" id="unlockPwdInput" placeholder="输入电脑登录密码，免密系统请留空" style="padding-right:42px;" oninput="onAutoUnlockToggleChange(false)">
+              <button type="button" onclick="togglePasswordVisibility()" style="position:absolute; right:8px; background:none; border:none; color:var(--text-sub); cursor:pointer; font-size:16px; padding:4px;" title="显示/隐藏密码">👁️</button>
+            </div>
+            <button type="button" id="clearPwdBtn" class="btn btn-secondary" onclick="clearSavedPassword()" style="display:none; padding:8px 12px; font-size:12px; white-space:nowrap; border-color:rgba(239, 68, 68, 0.4); color:var(--accent-red);" title="清空已保存的电脑密码">清空密码</button>
           </div>
           <div class="form-hint" style="margin-top:5px;" id="pwdHelpHint">
             🔒 开启自动解锁：亮屏后自动键入密码解锁（免密系统留空则回车直接进入）；未开启：回到电脑旁仅点亮屏幕。
@@ -1221,13 +1224,15 @@
       }
     }
 
+    let hasSavedPassword = false;
+
     function onAutoUnlockToggleChange(userAction = true) {
       const toggle = document.getElementById('autoUnlockToggle');
       const badge = document.getElementById('autoUnlockBadge');
       const desc = document.getElementById('autoUnlockDesc');
       const pwdInput = document.getElementById('unlockPwdInput');
       const tip = document.getElementById('pwdStatusTip');
-      const pwdHint = document.getElementById('pwdHelpHint');
+      const clearBtn = document.getElementById('clearPwdBtn');
 
       const isEnabled = toggle ? toggle.checked : true;
       if (badge) {
@@ -1248,9 +1253,17 @@
           tip.innerText = '当前为仅亮屏模式 (不解锁)';
           tip.style.color = 'var(--accent-yellow)';
         } else {
-          const hasPwd = pwdInput && pwdInput.value.length > 0;
-          tip.innerText = hasPwd ? '已配置密码 (自动输入)' : '未设密码 (直接拉起回车)';
-          tip.style.color = hasPwd ? 'var(--accent-green)' : 'var(--accent-blue)';
+          const userTyped = pwdInput && pwdInput.value.length > 0;
+          if (userTyped) {
+            tip.innerText = '即将更新新密码';
+            tip.style.color = 'var(--accent-yellow)';
+          } else if (hasSavedPassword) {
+            tip.innerText = '已设置密码 (留空保持不变)';
+            tip.style.color = 'var(--accent-green)';
+          } else {
+            tip.innerText = '未设密码 (免密系统直接按回车)';
+            tip.style.color = 'var(--accent-blue)';
+          }
         }
       }
     }
@@ -1270,9 +1283,15 @@
           const toggle = document.getElementById('autoUnlockToggle');
           if (toggle) toggle.checked = (data.auto_unlock === true || data.auto_unlock === 1);
         }
-        if (data.unlock_pwd !== undefined) {
-          const pwdInput = document.getElementById('unlockPwdInput');
-          if (pwdInput) pwdInput.value = data.unlock_pwd;
+        hasSavedPassword = (data.has_unlock_pwd === true);
+        const pwdInput = document.getElementById('unlockPwdInput');
+        const clearBtn = document.getElementById('clearPwdBtn');
+        if (pwdInput) {
+          pwdInput.value = '';
+          pwdInput.placeholder = hasSavedPassword ? '●●●●●● (已安全保存，留空保持不变)' : '输入电脑登录密码，免密系统请留空';
+        }
+        if (clearBtn) {
+          clearBtn.style.display = hasSavedPassword ? 'inline-flex' : 'none';
         }
         onAutoUnlockToggleChange(false);
       } catch (e) {}
@@ -1282,6 +1301,31 @@
       const input = document.getElementById('unlockPwdInput');
       if (input) {
         input.type = input.type === 'password' ? 'text' : 'password';
+      }
+    }
+
+    async function clearSavedPassword() {
+      if (!confirm('确认要清空已保存的电脑开屏密码吗？')) return;
+      try {
+        const lockVal = parseInt(document.getElementById('sliderLockRssi').value);
+        const unlockVal = parseInt(document.getElementById('sliderUnlockRssi').value);
+        const timeoutVal = parseInt(document.getElementById('sliderTimeout').value);
+        const autoUnlockVal = document.getElementById('autoUnlockToggle')?.checked ? '1' : '0';
+        const res = await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `clear_pwd=1&lock_rssi=${encodeURIComponent(lockVal)}&unlock_rssi=${encodeURIComponent(unlockVal)}&timeout_ms=${encodeURIComponent(timeoutVal)}&os_mode=${encodeURIComponent(currentOS)}&auto_unlock=${encodeURIComponent(autoUnlockVal)}`
+        });
+        const d = await res.json();
+        if (d.ok) {
+          showToast('密码已清空！');
+          await loadSettings();
+          fetchStatus();
+        } else {
+          showToast('清空失败: ' + (d.msg || ''));
+        }
+      } catch (e) {
+        showToast('清空请求异常');
       }
     }
 
@@ -1309,14 +1353,21 @@
       const autoUnlockVal = document.getElementById('autoUnlockToggle')?.checked ? '1' : '0';
 
       try {
+        let body = `lock_rssi=${encodeURIComponent(lockVal)}&unlock_rssi=${encodeURIComponent(unlockVal)}&timeout_ms=${encodeURIComponent(timeoutVal)}&os_mode=${encodeURIComponent(currentOS)}&auto_unlock=${encodeURIComponent(autoUnlockVal)}`;
+        if (pwdVal.length > 0) {
+          body += `&unlock_pwd=${encodeURIComponent(pwdVal)}`;
+        }
         const res = await fetch('/api/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: `lock_rssi=${encodeURIComponent(lockVal)}&unlock_rssi=${encodeURIComponent(unlockVal)}&timeout_ms=${encodeURIComponent(timeoutVal)}&os_mode=${encodeURIComponent(currentOS)}&unlock_pwd=${encodeURIComponent(pwdVal)}&auto_unlock=${encodeURIComponent(autoUnlockVal)}`
+          body: body
         });
         const d = await res.json();
         if (d.ok) {
           showToast(d.msg || '配置参数已持久化保存！');
+          if (document.getElementById('unlockPwdInput')) {
+            document.getElementById('unlockPwdInput').value = '';
+          }
           await loadSettings();
           fetchStatus();
         } else {

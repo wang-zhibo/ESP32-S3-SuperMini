@@ -83,7 +83,6 @@ void WebService::registerRoutes() {
         json += "\"uptime_sec\":" + String(now / 1000) + ",";
         json += "\"firmware_version\":\"" + String(FIRMWARE_VERSION) + "\",";
         json += "\"free_heap_kb\":" + String(ESP.getFreeHeap() / 1024) + ",";
-        json += "\"unlock_pwd\":\"" + g_unlockPassword + "\",";
         json += "\"has_unlock_pwd\":" + String(g_unlockPassword.length() > 0 ? "true" : "false") + ",";
         json += "\"auto_unlock\":" + String(g_autoUnlockEnabled ? "true" : "false") + ",";
         json += "\"usb_hid_ready\":" + String(Locker.isTinyUSBEnabled() ? "true" : "false") + ",";
@@ -220,8 +219,13 @@ void WebService::registerRoutes() {
             unlockVal = _server.arg("unlock_rssi").toInt();
             timeoutVal = _server.arg("timeout_ms").toInt();
             osVal = _server.arg("os_mode").toInt();
-            if (_server.hasArg("unlock_pwd")) {
-                unlockPwd = _server.arg("unlock_pwd");
+            if (_server.hasArg("clear_pwd") && _server.arg("clear_pwd") == "1") {
+                unlockPwd = "";
+            } else if (_server.hasArg("unlock_pwd")) {
+                String p = _server.arg("unlock_pwd");
+                if (p.length() > 0) {
+                    unlockPwd = p;
+                }
             }
             if (_server.hasArg("auto_unlock")) {
                 String au = _server.arg("auto_unlock");
@@ -238,11 +242,17 @@ void WebService::registerRoutes() {
                 if (p3 != -1) timeoutVal = b.substring(p3 + 11).toInt();
                 int p4 = b.indexOf("os_mode=");
                 if (p4 != -1) osVal = b.substring(p4 + 8).toInt();
-                int p5 = b.indexOf("unlock_pwd=");
-                if (p5 != -1) {
-                    int endP = b.indexOf('&', p5);
-                    if (endP == -1) unlockPwd = b.substring(p5 + 11);
-                    else unlockPwd = b.substring(p5 + 11, endP);
+                if (b.indexOf("clear_pwd=1") != -1) {
+                    unlockPwd = "";
+                } else {
+                    int p5 = b.indexOf("unlock_pwd=");
+                    if (p5 != -1) {
+                        int endP = b.indexOf('&', p5);
+                        String p = (endP == -1) ? b.substring(p5 + 11) : b.substring(p5 + 11, endP);
+                        if (p.length() > 0) {
+                            unlockPwd = p;
+                        }
+                    }
                 }
                 int p6 = b.indexOf("auto_unlock=");
                 if (p6 != -1) {
