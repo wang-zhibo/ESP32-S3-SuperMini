@@ -82,6 +82,15 @@ class PhonePairServerCallbacks: public BLEServerCallbacks {
             pServer->startAdvertising();
         }
     }
+
+#if defined(CONFIG_NIMBLE_ENABLED)
+    void onDisconnect(BLEServer* pServer, ble_gap_conn_desc* desc) override {
+        Tracker.onCompanionDisconnected();
+        if (pServer) {
+            pServer->startAdvertising();
+        }
+    }
+#endif
 };
 
 BLETracker::BLETracker()
@@ -123,25 +132,32 @@ void BLETracker::begin() {
     // 1. 初始化 BLE Server 并提供标准 HID (0x1812) / Battery (0x180F) 伴侣直连服务
     _pServer = BLEDevice::createServer();
     _pServer->setCallbacks(new PhonePairServerCallbacks());
+#if defined(CONFIG_NIMBLE_ENABLED)
+    _pServer->advertiseOnDisconnect(true);
+#endif
 
-    // 标准 HID 报告描述符 (Gamepad / 遥控器类型)
+    // 标准 HID 报告描述符 (Consumer Control / 媒体自拍遥控器类型)
     // 核心优势: 
     // 1) 允许 iPhone/iPad/Mac 原生系统【设置 -> 蓝牙】直接搜到并配对连接
-    // 2) 避免像键盘外观那样导致 iPhone 弹出输入法时软键盘被隐藏
+    // 2) 具备 iOS 最高自动重连优先级 (iOS 后台 daemon 自动拉起已配对的遥控设备)
+    // 3) 不含文本键位 (Usage Page 0x0C)，绝对不会影响 iPhone 屏幕虚拟软键盘打字
     static const uint8_t hidReportDescriptor[] = {
-        0x05, 0x01,  // Usage Page (Generic Desktop)
-        0x09, 0x05,  // Usage (Gamepad)
-        0xA1, 0x01,  // Collection (Application)
-        0x85, 0x01,  //   Report ID (1)
-        0x05, 0x09,  //   Usage Page (Button)
-        0x19, 0x01,  //   Usage Minimum (Button 1)
-        0x29, 0x08,  //   Usage Maximum (Button 8)
-        0x15, 0x00,  //   Logical Minimum (0)
-        0x25, 0x01,  //   Logical Maximum (1)
-        0x75, 0x01,  //   Report Size (1)
-        0x95, 0x08,  //   Report Count (8)
-        0x81, 0x02,  //   Input (Data, Variable, Absolute)
-        0xC0         // End Collection
+        0x05, 0x0C,        // Usage Page (Consumer Devices)
+        0x09, 0x01,        // Usage (Consumer Control)
+        0xA1, 0x01,        // Collection (Application)
+        0x85, 0x01,        //   Report ID (1)
+        0x09, 0xE9,        //   Usage (Volume Up / Shutter)
+        0x09, 0xEA,        //   Usage (Volume Down)
+        0x09, 0xCD,        //   Usage (Play/Pause)
+        0x15, 0x00,        //   Logical Minimum (0)
+        0x25, 0x01,        //   Logical Maximum (1)
+        0x75, 0x01,        //   Report Size (1)
+        0x95, 0x03,        //   Report Count (3)
+        0x81, 0x02,        //   Input (Data, Variable, Absolute)
+        0x75, 0x01,        //   Report Size (1)
+        0x95, 0x05,        //   Report Count (5) - padding to 1 byte
+        0x81, 0x01,        //   Input (Constant)
+        0xC0               // End Collection
     };
 
     _pHid = new BLEHIDDevice(_pServer);
@@ -168,9 +184,11 @@ void BLETracker::begin() {
 
     // 启动伴侣可连接广播 (对外显示名称: ProximityLock-伴侣)
     BLEAdvertising* pAdv = BLEDevice::getAdvertising();
-    pAdv->setAppearance(0x03C4); // HID Gamepad (iOS 原生系统蓝牙列表必读)
+    pAdv->setAppearance(0x0180); // Generic Remote Control (iOS 极佳兼容性，自动重连)
     pAdv->addServiceUUID(_pHid->hidService()->getUUID()); // 0x1812
     pAdv->addServiceUUID(BLEUUID((uint16_t)0x180F));       // 0x180F
+    pAdv->setMinInterval(0x00A0); // 100 ms - 苹果配件规范推荐
+    pAdv->setMaxInterval(0x00F4); // 152.5 ms - 苹果配件规范推荐
     pAdv->setScanResponse(true);
     pAdv->setMinPreferred(0x06); // 协助 iOS/watchOS 快速识别并自动重连
     pAdv->setMaxPreferred(0x12);
@@ -590,7 +608,20 @@ void BLETracker::loop() {
         _pBLEScan->clearResults();
     }
 
-    // 3. 监控手机主动连接配对超时
+    // 3. 伴侣断连广播保活看门狗：确保在未连接状态下，BLE 广播持续发射等待回座秒连
+    static uint32_t lastAdvCheckMs = 0;
+    if (!_isCompanionConnected && (now - lastAdvCheckMs >= 2000)) {
+        lastAdvCheckMs = now;
+#if defined(CONFIG_NIMBLE_ENABLED)
+        if (!ble_gap_adv_active()) {
+            BLEDevice::startAdvertising();
+        }
+#elif defined(CONFIG_BLUEDROID_ENABLED)
+        BLEDevice::startAdvertising();
+#endif
+    }
+
+    // 4. 监控手机主动连接配对超时
     if (_phonePairModeActive) {
         if (now - _phonePairStartMs >= _phonePairTimeoutMs) {
             stopPhonePairMode();
