@@ -569,13 +569,28 @@
       <div class="card">
         <div class="card-title">距离判定阈值</div>
         
+        <!-- 明显直观的滑动调节口诀提示卡 -->
+        <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 12px; line-height: 1.6;">
+          <div style="font-weight: 700; color: var(--accent-blue); margin-bottom: 4px; display:flex; align-items:center; gap:6px;">
+            <span>💡 距离调节口诀（负数越小越远，越大越近）</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; color:var(--text-main); font-weight:600; margin-top:2px;">
+            <span>⬅️ 往左调：距离更远（走得更远才触发）</span>
+            <span>往右调：距离更近（贴近跟前才触发） ➡️</span>
+          </div>
+        </div>
+
         <div class="form-group">
           <div class="form-label">
             <span>离席锁屏阈值 (Lock RSSI)</span>
             <span id="labelLockRssi" style="color:var(--accent-red); font-weight:700;">-82 dBm</span>
           </div>
           <input type="range" class="slider" id="sliderLockRssi" min="-95" max="-60" value="-82" oninput="updateSettingsPreview()">
-          <div class="form-hint">当距离拉开、信号衰减至此值以下且超时，立即发送物理锁屏按键（约2~3米）。</div>
+          <div style="display:flex; justify-content:space-between; font-size:11px; margin-top:3px; margin-bottom:6px;">
+            <span style="color:var(--text-sub); font-weight:600;">⬅️ 走远才锁 (远距离 -95dBm)</span>
+            <span style="color:var(--text-sub); font-weight:600;">(近距离 -60dBm) 稍离桌即锁 ➡️</span>
+          </div>
+          <div class="form-hint">当走离工位、信号衰减至此值以下且超时，立即自动物理锁屏（推荐 -80 ~ -85 dBm）。</div>
         </div>
 
         <div class="form-group">
@@ -584,7 +599,11 @@
             <span id="labelUnlockRssi" style="color:var(--accent-green); font-weight:700;">-70 dBm</span>
           </div>
           <input type="range" class="slider" id="sliderUnlockRssi" min="-85" max="-50" value="-70" oninput="updateSettingsPreview()">
-          <div class="form-hint">当你回到工位，信号恢复至此值以上时，自动轻敲 Left-Shift 亮屏（需比锁屏高 8~12dBm 防止抖动）。</div>
+          <div style="display:flex; justify-content:space-between; font-size:11px; margin-top:3px; margin-bottom:6px;">
+            <span style="color:var(--text-sub); font-weight:600;">⬅️ 较远即可唤醒 (远距离 -85dBm)</span>
+            <span style="color:var(--text-sub); font-weight:600;">(贴近电脑 -50dBm) 入座才唤醒 ➡️</span>
+          </div>
+          <div class="form-hint">当你走回工位，信号恢复至此值以上时自动点亮屏幕/解锁（需比锁屏高 8~12dBm 防止抖动）。</div>
         </div>
 
         <div class="form-group">
@@ -593,7 +612,11 @@
             <span id="labelTimeout" style="color:var(--accent-yellow); font-weight:700;">4.0 秒</span>
           </div>
           <input type="range" class="slider" id="sliderTimeout" min="1000" max="10000" step="500" value="4000" oninput="updateSettingsPreview()">
-          <div class="form-hint">信号低于锁屏阈值或无广播包持续此时间后触发锁屏，防止人体短暂背身遮挡误锁。</div>
+          <div style="display:flex; justify-content:space-between; font-size:11px; margin-top:3px; margin-bottom:6px;">
+            <span style="color:var(--text-sub); font-weight:600;">⬅️ 快速灵敏 (1秒 立刻锁)</span>
+            <span style="color:var(--text-sub); font-weight:600;">(10秒 允许短暂离开) 防误锁 ➡️</span>
+          </div>
+          <div class="form-hint">信号低于锁屏阈值持续此时间后触发锁屏，防止人体短暂转身背对板子时遮挡误锁。</div>
         </div>
 
         <div class="form-group">
@@ -779,13 +802,30 @@
       }
     }
 
+    function getLockDistDesc(rssi) {
+      const val = parseInt(rssi);
+      if (val <= -88) return ' (走开 >3米)';
+      if (val <= -82) return ' (走开 约2~3米)';
+      if (val <= -76) return ' (走开 约1.5~2米)';
+      if (val <= -70) return ' (走开 约1米)';
+      return ' (贴近桌子 <0.8米)';
+    }
+
+    function getUnlockDistDesc(rssi) {
+      const val = parseInt(rssi);
+      if (val <= -80) return ' (较远距离即可唤醒)';
+      if (val <= -72) return ' (回桌约1.5米唤醒)';
+      if (val <= -65) return ' (入座桌前约1米唤醒)';
+      return ' (紧贴电脑 <0.5米)';
+    }
+
     function updateSettingsPreview() {
       const lockVal = document.getElementById('sliderLockRssi').value;
       const unlockVal = document.getElementById('sliderUnlockRssi').value;
       const timeoutVal = (document.getElementById('sliderTimeout').value / 1000).toFixed(1);
 
-      document.getElementById('labelLockRssi').innerText = lockVal + ' dBm';
-      document.getElementById('labelUnlockRssi').innerText = unlockVal + ' dBm';
+      document.getElementById('labelLockRssi').innerText = lockVal + ' dBm' + getLockDistDesc(lockVal);
+      document.getElementById('labelUnlockRssi').innerText = unlockVal + ' dBm' + getUnlockDistDesc(unlockVal);
       document.getElementById('labelTimeout').innerText = timeoutVal + ' 秒';
 
       // Update Dashboard Markers
