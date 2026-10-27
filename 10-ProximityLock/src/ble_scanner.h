@@ -6,6 +6,7 @@
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
 #include <BLESecurity.h>
+#include <BLEHIDDevice.h>
 #include <Preferences.h>
 #include <vector>
 #include "filter.h"
@@ -92,6 +93,7 @@ private:
     Preferences    _prefs;
     BLEScan*       _pBLEScan;
     BLEServer*     _pServer;
+    BLEHIDDevice*  _pHid;
     RSSIFilter     _filter;
 
     bool           _hasBoundDevice;

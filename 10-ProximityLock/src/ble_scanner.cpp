@@ -87,6 +87,7 @@ class PhonePairServerCallbacks: public BLEServerCallbacks {
 BLETracker::BLETracker()
     : _pBLEScan(nullptr),
       _pServer(nullptr),
+      _pHid(nullptr),
       _hasBoundDevice(false),
       _lastSeenMs(0),
       _lastRawRssi(-999),
@@ -119,22 +120,47 @@ void BLETracker::begin() {
     BLEDevice::setCustomGapHandler(customGapHandler);
 #endif
 
-    // 1. 初始化 BLE Server 并提供标准 Battery Service (0x180F) 与配对安全能力
+    // 1. 初始化 BLE Server 并提供标准 HID (0x1812) / Battery (0x180F) 伴侣直连服务
     _pServer = BLEDevice::createServer();
     _pServer->setCallbacks(new PhonePairServerCallbacks());
 
-    BLEService* pBatteryService = _pServer->createService(BLEUUID((uint16_t)0x180F));
-    BLECharacteristic* pBatteryChar = pBatteryService->createCharacteristic(
-        BLEUUID((uint16_t)0x2A19),
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
-    );
-    uint8_t battLevel = 100;
-    pBatteryChar->setValue(&battLevel, 1);
-    pBatteryService->start();
+    // 标准 HID 报告描述符 (Gamepad / 遥控器类型)
+    // 核心优势: 
+    // 1) 允许 iPhone/iPad/Mac 原生系统【设置 -> 蓝牙】直接搜到并配对连接
+    // 2) 避免像键盘外观那样导致 iPhone 弹出输入法时软键盘被隐藏
+    static const uint8_t hidReportDescriptor[] = {
+        0x05, 0x01,  // Usage Page (Generic Desktop)
+        0x09, 0x05,  // Usage (Gamepad)
+        0xA1, 0x01,  // Collection (Application)
+        0x85, 0x01,  //   Report ID (1)
+        0x05, 0x09,  //   Usage Page (Button)
+        0x19, 0x01,  //   Usage Minimum (Button 1)
+        0x29, 0x08,  //   Usage Maximum (Button 8)
+        0x15, 0x00,  //   Logical Minimum (0)
+        0x25, 0x01,  //   Logical Maximum (1)
+        0x75, 0x01,  //   Report Size (1)
+        0x95, 0x08,  //   Report Count (8)
+        0x81, 0x02,  //   Input (Data, Variable, Absolute)
+        0xC0         // End Collection
+    };
+
+    _pHid = new BLEHIDDevice(_pServer);
+    _pHid->manufacturer()->setValue("Espressif");
+    _pHid->pnp(0x02, 0x05ac, 0x820a, 0x0110);  // Apple Vendor ID 0x05ac
+    _pHid->hidInfo(0x00, 0x01);
+    _pHid->reportMap((uint8_t*)hidReportDescriptor, sizeof(hidReportDescriptor));
+    _pHid->setBatteryLevel(100);
+    _pHid->startServices();
 
     // 配置全平台免输码的 Just Works 安全配对 (BOND 模式)
     BLESecurity* pSecurity = new BLESecurity();
+#if defined(CONFIG_BLUEDROID_ENABLED)
     pSecurity->setAuthenticationMode(ESP_LE_AUTH_BOND);
+#elif defined(CONFIG_NIMBLE_ENABLED)
+    pSecurity->setAuthenticationMode(true, false, true); // bonding=true, mitm=false, sc=true
+#else
+    pSecurity->setAuthenticationMode(ESP_LE_AUTH_BOND);
+#endif
     pSecurity->setCapability(ESP_IO_CAP_NONE);
     pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
     pSecurity->setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
@@ -142,10 +168,12 @@ void BLETracker::begin() {
 
     // 启动伴侣可连接广播 (对外显示名称: ProximityLock-伴侣)
     BLEAdvertising* pAdv = BLEDevice::getAdvertising();
-    pAdv->addServiceUUID(BLEUUID((uint16_t)0x180F));
+    pAdv->setAppearance(0x03C4); // HID Gamepad (iOS 原生系统蓝牙列表必读)
+    pAdv->addServiceUUID(_pHid->hidService()->getUUID()); // 0x1812
+    pAdv->addServiceUUID(BLEUUID((uint16_t)0x180F));       // 0x180F
     pAdv->setScanResponse(true);
     pAdv->setMinPreferred(0x06); // 协助 iOS/watchOS 快速识别并自动重连
-    pAdv->setMinPreferred(0x12);
+    pAdv->setMaxPreferred(0x12);
     BLEDevice::startAdvertising();
 
     // 2. 初始化被动扫描 (兼顾周边信标与老式固定 MAC 设备)
@@ -174,7 +202,10 @@ void BLETracker::clearBond() {
     _hasBondedCompanion = false;
     _filter.reset();
     disconnectCompanion();
-    Serial.println("[BLE] 绑定的设备与伴侣长连接已全部清除解绑.");
+    if (_pServer) {
+        _pServer->startAdvertising();
+    }
+    Serial.println("[BLE] 绑定的设备与伴侣长连接已全部清除解绑, 已重启广播等待新设备.");
 }
 
 void BLETracker::setBoundDevice(const String& mac, const String& name) {
