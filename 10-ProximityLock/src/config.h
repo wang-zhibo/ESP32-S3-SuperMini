@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include "version.h"
 
 // ==========================================
 // ESP32-S3-SuperMini 硬件引脚分配
@@ -17,9 +18,15 @@
 #define DEFAULT_LEAVE_TIMEOUT_MS  4000  // 毫秒: 连续无信号或低信号超过此时长触发锁屏
 #define DEFAULT_PAUSE_DURATION_MS (15 * 60 * 1000) // 15分钟临时免打扰挂起
 
-#define TOUCH_SENSITIVITY_DELTA   12    // 电容触控相对基准的变化敏感度阈值
-#define BLE_SCAN_INTERVAL_MS      100   // BLE 扫描间隔
-#define BLE_SCAN_WINDOW_MS        99    // BLE 扫描窗口 (近乎 100% 占空比持续捕获)
+// 周边扫描列表范围限制：仅收录约 1 米以内设备 (RSSI >= -68 dBm)，超过 1 米的远距离设备一律不扫描收录
+#define BLE_DISCOVERY_RSSI_THRESHOLD -68
+
+#define ENABLE_TOUCH_PINS         0     // 裸引脚电容触摸开关: 0=关闭(默认, 防止裸板悬空引脚杂讯误触导致循环切换/重启), 1=开启
+#define TOUCH_SENSITIVITY_DELTA   2000  // ESP32-S3 电容触控基准变化敏感度 (S3基数在数万，需设为数千)
+
+// Wi-Fi 与 BLE 共存射频优化调度：给 Wi-Fi 预留 50ms 时间片，消除 Web 请求卡顿
+#define BLE_SCAN_INTERVAL_MS      120   // BLE 扫描间隔 (毫秒)
+#define BLE_SCAN_WINDOW_MS        70    // BLE 扫描窗口 (毫秒)
 
 // ==========================================
 // 支持的操作系统目标
@@ -41,3 +48,17 @@ enum ProximityState : uint8_t {
     STATE_LOCKED   = 4,   // 远离工位，已执行物理锁屏
     STATE_PAUSED   = 5    // 临时暂停锁定（会议/演示模式）
 };
+
+// 全局状态与配置共享声明
+extern OperatingSystem  g_osMode;
+extern ProximityState   g_state;
+extern int              g_lockRSSI;
+extern int              g_unlockRSSI;
+extern uint32_t         g_leaveTimeoutMs;
+extern uint32_t         g_pauseStartMs;
+extern String           g_unlockPassword;
+extern bool             g_autoUnlockEnabled;
+
+void saveRuntimeSettings(int lockRssi, int unlockRssi, uint32_t timeoutMs, OperatingSystem os, const String& unlockPwd, bool autoUnlock);
+void saveRuntimeSettings(int lockRssi, int unlockRssi, uint32_t timeoutMs, OperatingSystem os, const String& unlockPwd);
+void saveRuntimeSettings(int lockRssi, int unlockRssi, uint32_t timeoutMs, OperatingSystem os);

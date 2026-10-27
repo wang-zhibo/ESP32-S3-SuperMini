@@ -10,6 +10,7 @@
 *.swo
 
 # Build Artifacts
+build/
 *.bin
 *.elf
 *.o

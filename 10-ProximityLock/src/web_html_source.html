@@ -1,0 +1,1445 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>ESP32-S3 ProximityLock 物理锁屏保镖</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: rgba(23, 32, 54, 0.7);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --accent-blue: #38bdf8;
+      --accent-green: #34d399;
+      --accent-yellow: #fbbf24;
+      --accent-red: #f87171;
+      --accent-purple: #c084fc;
+      --text-main: #f1f5f9;
+      --text-sub: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif; }
+    body {
+      background: radial-gradient(circle at 50% 0%, #1e293b, var(--bg));
+      color: var(--text-main);
+      min-height: 100vh;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .container { width: 100%; max-width: 580px; }
+    
+    /* Header */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--card-border);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .brand-icon {
+      width: 36px; height: 36px;
+      background: linear-gradient(135deg, #0ea5e9, #6366f1);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      box-shadow: 0 0 15px rgba(56, 189, 248, 0.4);
+    }
+    .brand-title { font-size: 17px; font-weight: 700; color: #fff; letter-spacing: 0.5px; }
+    .brand-sub { font-size: 11px; color: var(--text-sub); }
+    .status-badge {
+      padding: 5px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+    }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .dot-present { background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); }
+    .dot-leaving { background: var(--accent-yellow); box-shadow: 0 0 8px var(--accent-yellow); }
+    .dot-locked  { background: var(--accent-red); box-shadow: 0 0 8px var(--accent-red); }
+    .dot-paused  { background: var(--accent-purple); box-shadow: 0 0 8px var(--accent-purple); }
+    .dot-unpaired{ background: #64748b; }
+
+    /* Nav Tabs */
+    .tabs {
+      display: flex;
+      background: rgba(15, 23, 42, 0.8);
+      backdrop-filter: blur(8px);
+      padding: 4px;
+      border-radius: 12px;
+      border: 1px solid var(--card-border);
+      margin-bottom: 16px;
+      gap: 4px;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 10px 0;
+      border: none;
+      background: transparent;
+      color: var(--text-sub);
+      font-size: 13px;
+      font-weight: 600;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+    }
+    .tab-btn.active {
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.15), rgba(99, 102, 241, 0.2));
+      color: #fff;
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+    }
+
+    /* Cards */
+    .card {
+      background: var(--card-bg);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 18px;
+      margin-bottom: 16px;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+    }
+    .card-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    /* Dashboard RSSI Meter */
+    .meter-container {
+      background: rgba(15, 23, 42, 0.6);
+      border-radius: 14px;
+      padding: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      margin-bottom: 14px;
+    }
+    .meter-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      margin-bottom: 10px;
+    }
+    .meter-val { font-size: 32px; font-weight: 800; color: var(--accent-blue); font-variant-numeric: tabular-nums; }
+    .meter-unit { font-size: 13px; color: var(--text-sub); font-weight: 500; margin-left: 2px; }
+    .meter-sub { font-size: 12px; color: var(--text-sub); text-align: right; }
+    .bar-bg {
+      height: 12px;
+      background: #1e293b;
+      border-radius: 6px;
+      overflow: hidden;
+      position: relative;
+    }
+    .bar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent-red), var(--accent-yellow) 40%, var(--accent-green));
+      border-radius: 6px;
+      transition: width 0.35s ease;
+    }
+    .threshold-markers {
+      position: relative;
+      height: 18px;
+      margin-top: 4px;
+      font-size: 10px;
+      color: var(--text-sub);
+    }
+    .marker-lock { position: absolute; transform: translateX(-50%); color: var(--accent-red); }
+    .marker-unlock { position: absolute; transform: translateX(-50%); color: var(--accent-green); }
+
+    /* Device Info Box */
+    .info-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .info-box {
+      background: rgba(15, 23, 42, 0.5);
+      border-radius: 10px;
+      padding: 10px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.03);
+    }
+    .info-label { font-size: 11px; color: var(--text-sub); margin-bottom: 3px; }
+    .info-value { font-size: 13px; font-weight: 600; color: #fff; word-break: break-all; }
+
+    /* Action Buttons */
+    .action-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+    }
+    .btn {
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: none;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.2s ease;
+    }
+    .btn:active { transform: scale(0.97); }
+    .btn-primary { background: linear-gradient(135deg, #0ea5e9, #3b82f6); color: #fff; box-shadow: 0 4px 12px rgba(14, 165, 233, 0.3); }
+    .btn-secondary { background: rgba(255, 255, 255, 0.07); color: #e2e8f0; border: 1px solid var(--card-border); }
+    .btn-secondary:hover { background: rgba(255, 255, 255, 0.12); }
+    .btn-danger { background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .btn-danger:hover { background: rgba(239, 68, 68, 0.3); }
+    .btn-block { width: 100%; }
+
+    /* BLE Device List */
+    .device-list { display: flex; flex-direction: column; gap: 8px; max-height: 380px; overflow-y: auto; padding-right: 4px; }
+    .device-item {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      transition: all 0.2s ease;
+    }
+    .device-item.bound {
+      border-color: rgba(56, 189, 248, 0.5);
+      background: rgba(14, 165, 233, 0.08);
+    }
+    .dev-name { font-size: 14px; font-weight: 600; color: #fff; }
+    .dev-mac { font-size: 11px; color: var(--text-sub); font-family: monospace; }
+    .dev-rssi { font-size: 12px; font-weight: 700; color: var(--accent-blue); }
+
+    /* Form Inputs */
+    .form-group { margin-bottom: 14px; }
+    .form-label { display: flex; justify-content: space-between; font-size: 13px; font-weight: 500; color: #e2e8f0; margin-bottom: 6px; }
+    .form-hint { font-size: 11px; color: var(--text-sub); }
+    .input-text, select {
+      width: 100%;
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      color: #fff;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.2s ease;
+    }
+    .input-text:focus, select:focus { border-color: var(--accent-blue); }
+
+    /* Toggle Switch */
+    .toggle-wrapper {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      margin-bottom: 14px;
+    }
+    .toggle-switch {
+      position: relative;
+      display: inline-block;
+      width: 46px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: rgba(255, 255, 255, 0.16);
+      transition: .25s ease;
+      border-radius: 24px;
+    }
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background-color: #fff;
+      transition: .25s ease;
+      border-radius: 50%;
+    }
+    input:checked + .toggle-slider {
+      background-color: var(--accent-green);
+    }
+    input:checked + .toggle-slider:before {
+      transform: translateX(22px);
+    }
+
+    .slider {
+      width: 100%;
+      height: 6px;
+      border-radius: 3px;
+      background: #1e293b;
+      outline: none;
+      -webkit-appearance: none;
+      margin: 8px 0;
+    }
+    .slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 18px; height: 18px;
+      border-radius: 50%;
+      background: var(--accent-blue);
+      cursor: pointer;
+      box-shadow: 0 0 8px rgba(56, 189, 248, 0.5);
+    }
+
+    /* Radio Group for OS */
+    .radio-group { display: flex; gap: 8px; }
+    .radio-chip {
+      flex: 1;
+      padding: 10px 0;
+      text-align: center;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-sub);
+      transition: all 0.2s ease;
+    }
+    .radio-chip.selected {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: var(--accent-blue);
+      color: #fff;
+    }
+
+    /* Toast Notification */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: rgba(15, 23, 42, 0.95);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--accent-blue);
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 20px;
+      font-size: 13px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 1000;
+      pointer-events: none;
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; animation: fadeIn 0.25s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+    /* Modal Dialog for Incoming Bluetooth Connection */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      padding: 20px;
+    }
+    .modal-overlay.active { display: flex; }
+    .modal-box {
+      background: #1e293b;
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      box-shadow: 0 20px 40px rgba(0,0,0,0.6), 0 0 25px rgba(14, 165, 233, 0.25);
+      border-radius: 16px;
+      max-width: 400px;
+      width: 100%;
+      padding: 24px;
+      text-align: center;
+      animation: popIn 0.25s ease-out;
+    }
+    @keyframes popIn {
+      from { transform: scale(0.92); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 0.8; }
+      50% { transform: scale(1.15); opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header>
+      <div class="brand">
+        <div class="brand-icon">🛡️</div>
+        <div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <div class="brand-title">ProximityLock</div>
+            <span style="font-size:10px; background:rgba(56, 189, 248, 0.15); color:var(--accent-blue); padding:1px 6px; border-radius:6px; font-weight:700; border:1px solid rgba(56, 189, 248, 0.3);" id="dashFirmwareVersion">v2.1.0</span>
+          </div>
+          <div class="brand-sub">ESP32-S3 物理锁屏保镖</div>
+        </div>
+      </div>
+      <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
+        <div class="status-badge" id="headerStatusBadge">
+          <span class="status-dot dot-unpaired" id="headerStatusDot"></span>
+          <span id="headerStatusText">连接中...</span>
+        </div>
+        <div class="status-badge" id="headerWifiBadge" style="font-size:11px; padding:3px 10px;">
+          <span class="status-dot dot-unpaired" id="headerWifiDot"></span>
+          <span id="headerWifiText">WiFi: 读取中...</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('dashboard')">📊 仪表盘</button>
+      <button class="tab-btn" onclick="switchTab('ble')">📡 蓝牙配对</button>
+      <button class="tab-btn" onclick="switchTab('settings')">⚙️ 阈值设置</button>
+      <button class="tab-btn" onclick="switchTab('wifi')">📶 网络配置</button>
+    </div>
+
+    <!-- Tab 1: Dashboard -->
+    <div id="tab-dashboard" class="tab-content active">
+      <div class="card">
+        <div class="card-title">
+          <span>距离雷达探测</span>
+          <span style="font-size:12px; font-weight:normal; color:var(--text-sub);" id="dashTargetOs">Windows (Win+L)</span>
+        </div>
+        
+        <div class="meter-container">
+          <div class="meter-header">
+            <div>
+              <span class="meter-val" id="dashRssi">--</span>
+              <span class="meter-unit">dBm</span>
+            </div>
+            <div class="meter-sub">
+              <div id="dashDistanceState" style="font-weight:600; color:#fff;">探测中...</div>
+              <div id="dashLastSeen">最后收到广播: -- 秒前</div>
+            </div>
+          </div>
+          <div class="bar-bg">
+            <div class="bar-fill" id="dashRssiBar"></div>
+          </div>
+          <div class="threshold-markers">
+            <span class="marker-lock" id="markerLock" style="left: 20%;">▲ 锁屏 -82</span>
+            <span class="marker-unlock" id="markerUnlock" style="left: 45%;">▲ 唤醒 -70</span>
+          </div>
+        </div>
+
+        <div class="info-grid" style="grid-template-columns: 1fr 1fr 1fr;">
+          <div class="info-box">
+            <div class="info-label">绑定目标设备</div>
+            <div class="info-value" id="dashBoundName">未绑定</div>
+            <div style="font-size:10px; color:var(--text-sub); font-family:monospace;" id="dashBoundMac">--:--:--:--:--:--</div>
+          </div>
+          <div class="info-box">
+            <div class="info-label">设备运行状态</div>
+            <div class="info-value" id="dashStateText">未绑定</div>
+            <div style="font-size:10px; color:var(--text-sub);" id="dashUptime">运行时间: 0分</div>
+          </div>
+          <div class="info-box">
+            <div class="info-label">固件版本号</div>
+            <div class="info-value" id="dashFirmwareVer" style="color:var(--accent-blue);">v2.1.0</div>
+            <div style="font-size:10px; color:var(--text-sub);" id="dashFreeHeap">可用内存: -- KB</div>
+          </div>
+        </div>
+
+        <div class="action-grid" style="grid-template-columns: 1fr 1fr; gap: 8px;">
+          <button class="btn btn-danger" onclick="triggerAction('lock')">🔒 立即锁屏</button>
+          <button class="btn btn-primary" onclick="triggerAction('unlock')">🔑 测试开屏解锁</button>
+          <button class="btn btn-secondary" onclick="triggerAction('wake')">⚡ 唤醒屏幕</button>
+          <button class="btn btn-secondary" id="btnPause" onclick="triggerAction('pause')">☕ 免打扰15分</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">快捷状态与内网访问</div>
+        <div style="font-size:13px; color:var(--text-sub); line-height:1.6;" id="dashNetInfo">
+          正在读取 Wi-Fi 网络状态...
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 2: BLE Device Pairing -->
+    <div id="tab-ble" class="tab-content">
+      <!-- 方式一：手机主动连接配对 (最推荐) -->
+      <div class="card" style="border-color: rgba(56, 189, 248, 0.4); background: linear-gradient(180deg, rgba(14, 165, 233, 0.08) 0%, rgba(15, 23, 42, 0.7) 100%);">
+        <div class="card-title" style="color:var(--accent-blue);">
+          <span>📱 方式一：手机主动点击连接配对 (最推荐·零误绑)</span>
+          <span id="phonePairStatusBadge" style="font-size:11px; padding:2px 8px; border-radius:10px; background:rgba(255,255,255,0.06); color:var(--text-sub);">未开启</span>
+        </div>
+        <div style="font-size:12px; color:#cbd5e1; line-height:1.6; margin-bottom:12px;">
+          💡 <b>最简单的绑定方式</b>：无需在长长的蓝牙列表中辨别设备名称！<br>
+          1. 点击下方【开启手机连接配对】<br>
+          2. 打开手机<b>【系统设置】→【蓝牙】</b>，在可用设备中点击连接 <b>ProximityLock-配对</b><br>
+          3. 页面将立即弹出设备 MAC 地址与确认框，点击【确认绑定】即可完成！
+        </div>
+
+        <div id="phonePairIdleBox">
+          <button class="btn btn-primary btn-block" onclick="startPhonePairing()">📲 开启手机连接配对 (60秒)</button>
+        </div>
+
+        <div id="phonePairActiveBox" style="display:none; background:rgba(15, 23, 42, 0.75); border:1px solid rgba(56, 189, 248, 0.4); border-radius:12px; padding:14px; text-align:center;">
+          <div style="display:inline-block; font-size:24px; animation: pulse 1.5s infinite; margin-bottom:4px;">📡</div>
+          <div style="font-weight:700; color:#fff; font-size:14px; margin-bottom:4px;">ESP32 正在广播蓝牙配对信号...</div>
+          <div style="font-size:12px; color:var(--text-sub); margin-bottom:10px;">
+            请打开手机蓝牙设置，搜索并点击：<br>
+            <b style="color:var(--accent-blue); font-size:14px; font-family:monospace; background:rgba(56, 189, 248, 0.15); padding:2px 8px; border-radius:4px; display:inline-block; margin-top:4px;">ProximityLock-配对</b>
+          </div>
+          <div style="font-size:12px; color:var(--accent-yellow); margin-bottom:12px;" id="phonePairCountdown">
+            等待手机点击连接中... (<span id="phonePairTimerText">60</span>s)
+          </div>
+          <button class="btn btn-secondary" style="padding:6px 16px; font-size:12px;" onclick="stopPhonePairing()">⏹ 取消配对模式</button>
+        </div>
+      </div>
+
+      <!-- 方式二：周边蓝牙设备扫描 -->
+      <div class="card">
+        <div class="card-title">
+          <span>方式二：周边蓝牙广播扫描 (限 1 米范围)</span>
+          <div style="display:flex; gap:6px;">
+            <button class="btn btn-secondary" style="padding:4px 8px; font-size:11px;" onclick="clearBleDevices()">🗑️ 清空重搜</button>
+            <button class="btn btn-secondary" style="padding:4px 10px; font-size:11px;" onclick="refreshBleDevices()">🔄 刷新列表</button>
+          </div>
+        </div>
+        <div style="background:rgba(56, 189, 248, 0.08); border:1px solid rgba(56, 189, 248, 0.25); border-radius:12px; padding:12px 14px; margin-bottom:12px; font-size:12px; line-height:1.6; color:#cbd5e1;">
+          🎯 <b>已启用 1 米物理距离精准捕获</b>：<br>
+          系统已开启硬件级信号门限（RSSI ≥ -68 dBm），<b>超过 1 米以外的远距离路过设备一律不予扫描收录</b>，列表干干净净！<br>
+          👉 请将您的手机或手表直接拿在 ESP32 板子旁边（&lt;1 米），点击【🔄 刷新列表】即可秒级精准捕获，点击【绑定】输入专属备注名！
+        </div>
+
+        <!-- 快速过滤与排除栏 -->
+        <div style="display:flex; gap:8px; margin-bottom:12px; align-items:center;">
+          <div style="flex:1;">
+            <input type="text" class="input-text" id="bleSearchFilter" placeholder="🔍 快速过滤名称或 MAC..." oninput="renderFilteredBleList()" style="padding:7px 10px; font-size:12px;">
+          </div>
+          <div style="width:160px;">
+            <select id="bleRssiFilter" onchange="renderFilteredBleList()" style="padding:7px 8px; font-size:12px;">
+              <option value="-68" selected>🎯 1米范围 (&gt; -68 dBm)</option>
+              <option value="-60">🔥 贴近距离 (&gt; -60 dBm)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="device-list" id="bleDeviceList">
+          <div style="text-align:center; padding:32px 16px; color:var(--text-sub);">
+            <div style="font-size:26px; margin-bottom:8px;">📡</div>
+            <div style="font-size:13px; color:#cbd5e1; margin-bottom:6px;">将手机/手环贴近板子即可快速识别</div>
+            <div style="font-size:11px; margin-bottom:14px;">点击右上角【🔄 刷新列表】或下方按钮开始捕获广播</div>
+            <button class="btn btn-primary" style="padding:8px 18px; font-size:12px;" onclick="refreshBleDevices()">🔄 立即刷新列表</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">高级配对方式</div>
+        <div style="display:flex; gap:8px; margin-bottom:12px;">
+          <button class="btn btn-primary" style="flex:1;" onclick="startPairMode()">⚡ 贴近雷达快速配对 (8秒)</button>
+          <button class="btn btn-danger" style="flex:1;" onclick="unbindDevice()">❌ 解除当前绑定</button>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <div class="form-label">手动输入目标 MAC 地址</div>
+          <div style="display:flex; gap:8px;">
+            <input type="text" class="input-text" id="manualMacInput" placeholder="例如: AA:BB:CC:11:22:33" maxlength="17">
+            <button class="btn btn-secondary" onclick="bindManualMac()">确认绑定</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 3: Settings -->
+    <div id="tab-settings" class="tab-content">
+      <div class="card">
+        <div class="card-title">距离判定阈值</div>
+        
+        <div class="form-group">
+          <div class="form-label">
+            <span>离席锁屏阈值 (Lock RSSI)</span>
+            <span id="labelLockRssi" style="color:var(--accent-red); font-weight:700;">-82 dBm</span>
+          </div>
+          <input type="range" class="slider" id="sliderLockRssi" min="-95" max="-60" value="-82" oninput="updateSettingsPreview()">
+          <div class="form-hint">当距离拉开、信号衰减至此值以下且超时，立即发送物理锁屏按键（约2~3米）。</div>
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">
+            <span>归位唤醒阈值 (Unlock RSSI)</span>
+            <span id="labelUnlockRssi" style="color:var(--accent-green); font-weight:700;">-70 dBm</span>
+          </div>
+          <input type="range" class="slider" id="sliderUnlockRssi" min="-85" max="-50" value="-70" oninput="updateSettingsPreview()">
+          <div class="form-hint">当你回到工位，信号恢复至此值以上时，自动轻敲 Left-Shift 亮屏（需比锁屏高 8~12dBm 防止抖动）。</div>
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">
+            <span>离开判定超时 (Timeout)</span>
+            <span id="labelTimeout" style="color:var(--accent-yellow); font-weight:700;">4.0 秒</span>
+          </div>
+          <input type="range" class="slider" id="sliderTimeout" min="1000" max="10000" step="500" value="4000" oninput="updateSettingsPreview()">
+          <div class="form-hint">信号低于锁屏阈值或无广播包持续此时间后触发锁屏，防止人体短暂背身遮挡误锁。</div>
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">受控电脑操作系统</div>
+          <div class="radio-group">
+            <div class="radio-chip selected" id="chipOS0" onclick="selectOS(0)">Windows<br><span style="font-size:10px;">Win+L</span></div>
+            <div class="radio-chip" id="chipOS1" onclick="selectOS(1)">macOS<br><span style="font-size:10px;">Cmd+Ctrl+Q</span></div>
+            <div class="radio-chip" id="chipOS2" onclick="selectOS(2)">Linux<br><span style="font-size:10px;">Ctrl+Alt+L</span></div>
+          </div>
+        </div>
+
+        <button class="btn btn-primary btn-block" style="margin-top:16px;" onclick="saveSettings()">💾 保存判定参数</button>
+      </div>
+
+      <!-- 自动开屏解锁密码设置 -->
+      <div class="card" style="border-color: rgba(56, 189, 248, 0.35);">
+        <div class="card-title">
+          <span>🔑 靠近开屏 / 自动解锁选项</span>
+          <span id="autoUnlockBadge" style="font-size:11px; padding:2px 8px; border-radius:6px; background:rgba(34, 197, 94, 0.15); color:var(--accent-green);">已开启自动解锁</span>
+        </div>
+
+        <!-- 靠近是否自动解锁选项开关 -->
+        <div class="toggle-wrapper">
+          <div style="padding-right:12px;">
+            <div style="font-weight:600; font-size:13px; color:var(--text-main);">
+              回到电脑旁自动解锁
+            </div>
+            <div style="font-size:12px; color:var(--text-sub); margin-top:2px;" id="autoUnlockDesc">
+              开启：回到电脑旁自动唤醒并解锁；关闭：回到电脑旁仅点亮屏幕，不输入密码
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="autoUnlockToggle" onchange="onAutoUnlockToggleChange()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="form-group" style="margin-bottom:12px;">
+          <div class="form-label">
+            <span>电脑登录密码 (仅在开启自动解锁时使用)</span>
+            <span id="pwdStatusTip" style="font-size:11px; color:var(--accent-green);">读取中...</span>
+          </div>
+          <div style="position:relative; display:flex; align-items:center;">
+            <input type="password" class="input-text" id="unlockPwdInput" placeholder="输入电脑登录密码，免密系统请留空" style="padding-right:42px;">
+            <button type="button" onclick="togglePasswordVisibility()" style="position:absolute; right:8px; background:none; border:none; color:var(--text-sub); cursor:pointer; font-size:16px; padding:4px;" title="显示/隐藏密码">👁️</button>
+          </div>
+          <div class="form-hint" style="margin-top:5px;" id="pwdHelpHint">
+            🔒 开启自动解锁：亮屏后自动键入密码解锁（免密系统留空则回车直接进入）；未开启：回到电脑旁仅点亮屏幕。
+          </div>
+        </div>
+
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-primary" style="flex:1;" onclick="saveUnlockPassword()">💾 保存解锁设置</button>
+          <button class="btn btn-secondary" style="flex:1;" onclick="testUnlockPassword()">⚡ 立即测试开屏解锁</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 4: Wi-Fi Setup -->
+    <div id="tab-wifi" class="tab-content">
+      <!-- 当前网络状态与访问地址 (置顶常显卡片) -->
+      <div class="card" style="border-color: rgba(56, 189, 248, 0.35); background: rgba(14, 165, 233, 0.06);">
+        <div class="card-title">
+          <span>当前网络连接状态</span>
+          <span id="wifiStatusBadge" class="status-badge" style="font-size:11px; padding:3px 10px;">
+            <span class="status-dot dot-unpaired" id="wifiStatusDot"></span>
+            <span id="wifiStatusBadgeText">读取中...</span>
+          </span>
+        </div>
+        <div class="info-grid" style="grid-template-columns: 1fr; gap: 8px; margin-bottom:0;">
+          <div class="info-box">
+            <div class="info-label">内网局域网访问地址 (STA IP)</div>
+            <div class="info-value" id="wifiStaIpDisplay" style="font-size:15px; color:var(--accent-blue);">读取中...</div>
+            <div style="font-size:11px; color:var(--text-sub); margin-top:3px;" id="wifiSsidDisplay">路由器 SSID: 读取中...</div>
+          </div>
+          <div class="info-box">
+            <div class="info-label">局域网免记 IP 域名 (mDNS)</div>
+            <div class="info-value"><a href="http://proximitylock.local" target="_blank" style="color:var(--accent-green); text-decoration:none;">http://proximitylock.local ↗</a></div>
+          </div>
+          <div class="info-box" style="grid-column: 1 / -1;">
+            <div class="info-label">板载备用直连热点 (AP IP)</div>
+            <div class="info-value"><a href="http://192.168.4.1" target="_blank" style="color:#94a3b8; text-decoration:none;">http://192.168.4.1 ↗</a></div>
+            <div style="font-size:11px; color:var(--text-sub); margin-top:3px;" id="wifiApNameDisplay">热点名称: 读取中...</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          <span>Wi-Fi 网络配网</span>
+          <button class="btn btn-secondary" style="padding:4px 10px; font-size:12px;" onclick="scanWifi()">🔍 扫描 Wi-Fi</button>
+        </div>
+        <div style="font-size:12px; color:var(--text-sub); margin-bottom:12px;">
+          将板子接入办公室或家庭 Wi-Fi 路由器后，电脑或手机可在局域网内直接访问 Web 控制台，免去连接直连热点的繁琐。
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">选择 Wi-Fi 路由器</div>
+          <select id="wifiSsidSelect" onchange="onSsidSelected()">
+            <option value="">点击右上角扫描，或直接手动输入...</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">Wi-Fi 名称 (SSID)</div>
+          <input type="text" class="input-text" id="wifiSsidInput" placeholder="输入 Wi-Fi 名称">
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">Wi-Fi 密码</div>
+          <input type="password" class="input-text" id="wifiPassInput" placeholder="输入密码 (若为开放网络可留空)">
+        </div>
+
+        <button class="btn btn-primary btn-block" onclick="saveWifi()">📶 连接并保存 Wi-Fi</button>
+        <button class="btn btn-secondary btn-block" style="margin-top:8px;" onclick="resetWifi()">🔄 重置为纯 AP 热点模式</button>
+      </div>
+
+      <div class="card">
+        <div class="card-title">系统与固件升级</div>
+        <button class="btn btn-primary btn-block" style="margin-bottom:10px; background:linear-gradient(135deg,#0284c7,#0369a1);" onclick="window.open('/update', '_blank')">🚀 固件无线 OTA 升级 (新标签页打开)</button>
+        <button class="btn btn-secondary btn-block" onclick="rebootSystem()">🔁 软重启 ESP32-S3</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <!-- 手机连接配对确认弹窗 -->
+  <div id="incomingPairModal" class="modal-overlay">
+    <div class="modal-box">
+      <div style="font-size:36px; margin-bottom:10px; animation: pulse 1.2s infinite;">🔔</div>
+      <h3 style="margin:0 0 8px 0; color:#fff; font-size:17px;">检测到手机发起蓝牙连接！</h3>
+      <div style="font-size:12px; color:var(--text-sub); margin-bottom:14px; line-height:1.5;">
+        手机已成功连接至 ESP32 配对信标，是否将其绑定为离席锁屏钥匙？
+      </div>
+      <div style="background:rgba(15, 23, 42, 0.9); border:1px solid var(--card-border); border-radius:10px; padding:10px; margin-bottom:14px; text-align:left;">
+        <div style="font-size:11px; color:var(--text-sub);">检测到的手机蓝牙 MAC：</div>
+        <div id="modalIncomingMac" style="font-family:monospace; font-size:14px; font-weight:700; color:var(--accent-blue); margin-top:2px;">--:--:--:--:--:--</div>
+      </div>
+      <div class="form-group" style="text-align:left; margin-bottom:16px;">
+        <div class="form-label">为此设备设置备注名：</div>
+        <input type="text" class="input-text" id="modalDeviceAlias" placeholder="例如：我的 iPhone 15 / 随身手机" value="我的随身手机">
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button class="btn btn-secondary" style="flex:1;" onclick="rejectIncomingPair()">忽略 / 拒绝</button>
+        <button class="btn btn-primary" style="flex:1;" onclick="confirmIncomingPair()">✅ 确认绑定</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentOS = 0;
+    let pollInterval = null;
+
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      t.innerText = msg;
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2600);
+    }
+
+    function switchTab(name) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      event.currentTarget.classList.add('active');
+      document.getElementById('tab-' + name).classList.add('active');
+      
+      if (name === 'settings') {
+        loadSettings();
+      }
+    }
+
+    function selectOS(os) {
+      currentOS = os;
+      for (let i = 0; i < 3; i++) {
+        document.getElementById('chipOS' + i).classList.toggle('selected', i === os);
+      }
+    }
+
+    function updateSettingsPreview() {
+      const lockVal = document.getElementById('sliderLockRssi').value;
+      const unlockVal = document.getElementById('sliderUnlockRssi').value;
+      const timeoutVal = (document.getElementById('sliderTimeout').value / 1000).toFixed(1);
+
+      document.getElementById('labelLockRssi').innerText = lockVal + ' dBm';
+      document.getElementById('labelUnlockRssi').innerText = unlockVal + ' dBm';
+      document.getElementById('labelTimeout').innerText = timeoutVal + ' 秒';
+
+      // Update Dashboard Markers
+      const lPos = Math.round(((parseInt(lockVal) - (-95)) / 45) * 100);
+      const uPos = Math.round(((parseInt(unlockVal) - (-95)) / 45) * 100);
+      document.getElementById('markerLock').style.left = Math.max(5, Math.min(95, lPos)) + '%';
+      document.getElementById('markerUnlock').style.left = Math.max(5, Math.min(95, uPos)) + '%';
+      document.getElementById('markerLock').innerText = '▲ 锁屏 ' + lockVal;
+      document.getElementById('markerUnlock').innerText = '▲ 唤醒 ' + unlockVal;
+    }
+
+    async function fetchStatus() {
+      try {
+        const res = await fetch('/api/status');
+        if (!res.ok) return;
+        const data = await res.json();
+        renderDashboard(data);
+      } catch (e) {
+        document.getElementById('headerStatusText').innerText = '失联 / 离线';
+        document.getElementById('headerStatusDot').className = 'status-dot dot-unpaired';
+      }
+    }
+
+    function renderDashboard(data) {
+      const stateMap = {
+        0: { text: '未绑定设备', dot: 'dot-unpaired', color: '#94a3b8' },
+        1: { text: '贴近配对中...', dot: 'dot-leaving', color: 'var(--accent-yellow)' },
+        2: { text: '在场 (安全监护中)', dot: 'dot-present', color: 'var(--accent-green)' },
+        3: { text: '离开倒计时预警', dot: 'dot-leaving', color: 'var(--accent-yellow)' },
+        4: { text: '远离已锁屏', dot: 'dot-locked', color: 'var(--accent-red)' },
+        5: { text: '免打扰临时暂停', dot: 'dot-paused', color: 'var(--accent-purple)' }
+      };
+
+      const s = stateMap[data.state] || stateMap[0];
+      document.getElementById('headerStatusText').innerText = s.text;
+      document.getElementById('headerStatusDot').className = 'status-dot ' + s.dot;
+
+      document.getElementById('dashStateText').innerText = s.text;
+      document.getElementById('dashStateText').style.color = s.color;
+      const unlockModeStr = (data.auto_unlock ? ' · 自动解锁' : ' · 仅亮屏');
+      document.getElementById('dashTargetOs').innerText = (data.os_str || '') + unlockModeStr;
+
+      // 固件版本号与内存显示
+      if (data.firmware_version) {
+        const vText = 'v' + data.firmware_version;
+        const vEl1 = document.getElementById('dashFirmwareVersion');
+        if (vEl1) vEl1.innerText = vText;
+        const vEl2 = document.getElementById('dashFirmwareVer');
+        if (vEl2) vEl2.innerText = vText;
+      }
+      if (data.free_heap_kb) {
+        const heapEl = document.getElementById('dashFreeHeap');
+        if (heapEl) heapEl.innerText = '可用内存: ' + data.free_heap_kb + ' KB';
+      }
+
+      // 实时同步仪表盘上的锁屏/唤醒标尺指针
+      if (data.lock_rssi !== undefined && data.unlock_rssi !== undefined) {
+        const lPos = Math.round(((parseInt(data.lock_rssi) - (-95)) / 45) * 100);
+        const uPos = Math.round(((parseInt(data.unlock_rssi) - (-95)) / 45) * 100);
+        const mLock = document.getElementById('markerLock');
+        const mUnlock = document.getElementById('markerUnlock');
+        if (mLock) {
+          mLock.style.left = Math.max(5, Math.min(95, lPos)) + '%';
+          mLock.innerText = '▲ 锁屏 ' + data.lock_rssi;
+        }
+        if (mUnlock) {
+          mUnlock.style.left = Math.max(5, Math.min(95, uPos)) + '%';
+          mUnlock.innerText = '▲ 唤醒 ' + data.unlock_rssi;
+        }
+      }
+
+      const rssi = data.current_rssi;
+      if (data.state === 0) {
+        document.getElementById('dashRssi').innerText = '--';
+        document.getElementById('dashRssiBar').style.width = '0%';
+        document.getElementById('dashDistanceState').innerText = '请先在蓝牙标签页绑定设备';
+      } else {
+        document.getElementById('dashRssi').innerText = rssi > -990 ? rssi.toFixed(1) : '--';
+        const percent = Math.max(0, Math.min(100, Math.round(((rssi - (-95)) / 45) * 100)));
+        document.getElementById('dashRssiBar').style.width = percent + '%';
+        document.getElementById('dashDistanceState').innerText = s.text;
+      }
+
+      document.getElementById('dashLastSeen').innerText = data.last_seen_sec > 3600 ? '无信号' : ('最后收到: ' + data.last_seen_sec + ' 秒前');
+      document.getElementById('dashBoundName').innerText = data.bound_name || '蓝牙身份设备';
+      document.getElementById('dashBoundMac').innerText = data.bound_mac || '未绑定';
+
+      const upMins = Math.floor(data.uptime_sec / 60);
+      document.getElementById('dashUptime').innerText = '运行时间: ' + (upMins > 60 ? (Math.floor(upMins/60) + '小时' + (upMins%60) + '分') : (upMins + '分钟'));
+
+      const btnPause = document.getElementById('btnPause');
+      if (data.is_paused) {
+        btnPause.innerText = '▶️ 恢复监护 (' + Math.ceil(data.pause_remain_sec / 60) + 'm)';
+        btnPause.style.borderColor = 'var(--accent-purple)';
+      } else {
+        btnPause.innerText = '☕ 免打扰15分';
+        btnPause.style.borderColor = 'var(--card-border)';
+      }
+
+      // 手机主动连接配对模式状态更新
+      const pairInfo = data.incoming_pair || {};
+      const idleBox = document.getElementById('phonePairIdleBox');
+      const activeBox = document.getElementById('phonePairActiveBox');
+      const badge = document.getElementById('phonePairStatusBadge');
+      const timerText = document.getElementById('phonePairTimerText');
+      const modal = document.getElementById('incomingPairModal');
+      const modalMac = document.getElementById('modalIncomingMac');
+
+      if (pairInfo.active) {
+        if (idleBox) idleBox.style.display = 'none';
+        if (activeBox) activeBox.style.display = 'block';
+        if (badge) {
+          badge.innerText = '等待连接中 (' + (pairInfo.remain_sec || 0) + 's)';
+          badge.style.background = 'rgba(56, 189, 248, 0.2)';
+          badge.style.color = 'var(--accent-blue)';
+        }
+        if (timerText) timerText.innerText = pairInfo.remain_sec || 0;
+
+        // 如果检测到手机发起了连接请求，弹出模态确认对话框
+        if (pairInfo.has_request && pairInfo.mac) {
+          if (modal && !modal.classList.contains('active')) {
+            if (modalMac) modalMac.innerText = pairInfo.mac;
+            modal.classList.add('active');
+          }
+        }
+      } else {
+        if (idleBox) idleBox.style.display = 'block';
+        if (activeBox) activeBox.style.display = 'none';
+        if (badge) {
+          badge.innerText = '未开启';
+          badge.style.background = 'rgba(255,255,255,0.06)';
+          badge.style.color = 'var(--text-sub)';
+        }
+        if (modal && !pairInfo.has_request) {
+          modal.classList.remove('active');
+        }
+      }
+
+      // Net Info & WiFi Status Updates
+      const wifi = data.wifi || {};
+      const headerWifiText = document.getElementById('headerWifiText');
+      const headerWifiDot = document.getElementById('headerWifiDot');
+      const headerWifiBadge = document.getElementById('headerWifiBadge');
+
+      if (wifi.connected) {
+        headerWifiText.innerHTML = `WiFi: <a href="http://${wifi.sta_ip}" target="_blank" style="color:#fff; text-decoration:underline; font-weight:700;">${wifi.sta_ip}</a>`;
+        headerWifiDot.className = 'status-dot dot-present';
+        headerWifiBadge.style.borderColor = 'rgba(52, 211, 153, 0.4)';
+      } else if (wifi.connecting) {
+        headerWifiText.innerHTML = `WiFi: 正在连接 ${wifi.ssid || ''}...`;
+        headerWifiDot.className = 'status-dot dot-leaving';
+        headerWifiBadge.style.borderColor = 'rgba(251, 191, 36, 0.4)';
+      } else {
+        headerWifiText.innerHTML = `热点: <a href="http://192.168.4.1" style="color:var(--accent-yellow); text-decoration:none;">192.168.4.1</a>`;
+        headerWifiDot.className = 'status-dot dot-unpaired';
+        headerWifiBadge.style.borderColor = 'rgba(255, 255, 255, 0.08)';
+      }
+
+      // Tab 4: Wi-Fi Setup Cards
+      const staIpDisp = document.getElementById('wifiStaIpDisplay');
+      const ssidDisp = document.getElementById('wifiSsidDisplay');
+      const apNameDisp = document.getElementById('wifiApNameDisplay');
+      const wifiBadgeText = document.getElementById('wifiStatusBadgeText');
+      const wifiStatusDot = document.getElementById('wifiStatusDot');
+
+      let apStatusStr = '';
+      if (wifi.ap_active) {
+        if (wifi.ap_remain_sec > 0) {
+          apStatusStr = `运行中 (稳定 ${wifi.ap_remain_sec} 秒后自动关闭节能)`;
+        } else {
+          apStatusStr = '运行中 (192.168.4.1)';
+        }
+      } else {
+        apStatusStr = '已休眠关闭 (节能省电，断网时自动唤醒)';
+      }
+
+      if (staIpDisp && ssidDisp) {
+        if (wifi.connected) {
+          staIpDisp.innerHTML = `<a href="http://${wifi.sta_ip}" target="_blank" style="color:var(--accent-blue); text-decoration:underline; font-weight:800; font-size:17px;">http://${wifi.sta_ip} ↗</a>`;
+          ssidDisp.innerHTML = `已成功接入: <b style="color:#fff;">${wifi.ssid}</b> | 信号强度: <b style="color:var(--accent-green);">${wifi.rssi} dBm</b>`;
+          wifiBadgeText.innerHTML = '<span style="color:var(--accent-green); font-weight:700;">已连通局域网</span>';
+          wifiStatusDot.className = 'status-dot dot-present';
+        } else if (wifi.connecting) {
+          staIpDisp.innerHTML = '<span style="color:var(--accent-yellow);">正在获取内网 IP...</span>';
+          ssidDisp.innerHTML = `正在向路由器发起连接: <b>${wifi.ssid}</b>`;
+          wifiBadgeText.innerHTML = '<span style="color:var(--accent-yellow);">连接中...</span>';
+          wifiStatusDot.className = 'status-dot dot-leaving';
+        } else {
+          staIpDisp.innerHTML = '<span style="color:var(--text-sub);">尚未接入 Wi-Fi 路由器</span>';
+          ssidDisp.innerHTML = wifi.ssid ? `上次配置: <b>${wifi.ssid}</b> (连接未就绪)` : '尚未配置路由器 SSID';
+          wifiBadgeText.innerHTML = '<span style="color:var(--accent-yellow);">AP 直连热点模式</span>';
+          wifiStatusDot.className = 'status-dot dot-unpaired';
+        }
+        if (apNameDisp) apNameDisp.innerText = `热点名称: ${wifi.ap_name} | 状态: ${apStatusStr}`;
+      }
+
+      // Tab 1: Dashboard Net Info Card
+      let netHtml = '';
+      if (wifi.connected) {
+        netHtml = `
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <span style="color:var(--text-sub); font-size:13px;">内网局域网访问地址</span>
+            <a href="http://${wifi.sta_ip}" target="_blank" style="color:var(--accent-blue); font-weight:800; font-size:15px; text-decoration:none;">http://${wifi.sta_ip} ↗</a>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <span style="color:var(--text-sub); font-size:13px;">局域网免记域名 (mDNS)</span>
+            <a href="http://proximitylock.local" target="_blank" style="color:var(--accent-green); font-weight:700; text-decoration:none;">http://proximitylock.local ↗</a>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; font-size:12px; color:#64748b; padding-top:6px; border-top:1px solid rgba(255,255,255,0.05);">
+            <span>已连路由器: <b>${wifi.ssid}</b> (${wifi.rssi} dBm)</span>
+            <span>板载热点: <b>${apStatusStr}</b></span>
+          </div>
+        `;
+      } else if (wifi.connecting) {
+        netHtml = `
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <span style="color:var(--text-sub);">Wi-Fi 状态</span>
+            <span style="color:var(--accent-yellow); font-weight:700;">🟡 正在连接路由器 [${wifi.ssid}]...</span>
+          </div>
+          <div style="font-size:12px; color:var(--text-sub);">正在通过 DHCP 请求局域网 IP，请稍候约 3~5 秒...</div>
+        `;
+      } else {
+        netHtml = `
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <span style="color:var(--text-sub);">Wi-Fi 连接状态</span>
+            <span style="color:var(--accent-yellow); font-weight:600;">⚠️ 纯直连 AP 热点模式</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <span style="color:var(--text-sub);">热点管理地址</span>
+            <a href="http://192.168.4.1" style="color:var(--accent-blue); font-weight:700; text-decoration:none;">http://192.168.4.1 ↗</a>
+          </div>
+          <div style="font-size:12px; color:#94a3b8; margin-top:4px;">
+            提示: 板子尚未接入路由器。前往<b>【📶 网络配置】</b>选择办公室/家庭 Wi-Fi，即可分配到局域网内网 IP！
+          </div>
+        `;
+      }
+      document.getElementById('dashNetInfo').innerHTML = netHtml;
+    }
+
+    async function triggerAction(action) {
+      try {
+        const res = await fetch('/api/action/' + action, { method: 'POST' });
+        const d = await res.json();
+        showToast(d.msg || '操作成功');
+        fetchStatus();
+      } catch (e) {
+        showToast('请求失败');
+      }
+    }
+
+    let rawBleDevices = [];
+
+    async function refreshBleDevices() {
+      const container = document.getElementById('bleDeviceList');
+      container.innerHTML = '<div style="text-align:center; padding:24px; color:var(--text-sub);">正在检索周边活跃的 BLE 广播信标...</div>';
+
+      try {
+        const res = await fetch('/api/ble/devices');
+        rawBleDevices = await res.json() || [];
+        renderFilteredBleList();
+      } catch (e) {
+        container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--accent-red);">扫描接口异常，请重试.</div>';
+      }
+    }
+
+    async function clearBleDevices() {
+      const container = document.getElementById('bleDeviceList');
+      container.innerHTML = '<div style="text-align:center; padding:24px; color:var(--text-sub);">正在清空历史扫描记录...</div>';
+      try {
+        await fetch('/api/ble/clear', { method: 'POST' });
+        showToast('已清空历史缓存，正在捕获最新广播');
+        rawBleDevices = [];
+        setTimeout(refreshBleDevices, 800);
+      } catch (e) {
+        showToast('清空失败');
+      }
+    }
+
+    function renderFilteredBleList() {
+      const container = document.getElementById('bleDeviceList');
+      if (!rawBleDevices || rawBleDevices.length === 0) {
+        container.innerHTML = '<div style="text-align:center; padding:24px; color:var(--text-sub);">尚未扫描到设备，请点击右上角【🔄 刷新列表】开始搜寻.</div>';
+        return;
+      }
+
+      const minRssi = parseInt(document.getElementById('bleRssiFilter')?.value || '-100');
+      const search = (document.getElementById('bleSearchFilter')?.value || '').trim().toLowerCase();
+
+      const filtered = rawBleDevices.filter(dev => {
+        if (dev.rssi < minRssi) return false;
+        if (search) {
+          const matchName = (dev.name || '').toLowerCase().includes(search);
+          const matchMac = (dev.mac || '').toLowerCase().includes(search);
+          if (!matchName && !matchMac) return false;
+        }
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        container.innerHTML = `
+          <div style="text-align:center; padding:28px 16px; color:var(--text-sub); line-height:1.7;">
+            <div style="font-size:22px; margin-bottom:4px;">🔍</div>
+            未发现满足当前过滤条件的设备。<br>
+            <span style="font-size:12px; color:#94a3b8;">💡 提示：将手机贴近板子，或将右上角信号过滤切换为【🌐 全部设备】查看。</span>
+          </div>
+        `;
+        return;
+      }
+
+      let html = '';
+      filtered.forEach(dev => {
+        const isBound = dev.is_bound;
+        const isClose = (dev.rssi >= -65);
+        const displayName = dev.name || 'BLE 广播外设';
+        html += `
+          <div class="device-item ${isBound ? 'bound' : ''}">
+            <div>
+              <div class="dev-name">
+                ${displayName}
+                ${isBound ? '<span style="font-size:10px; background:var(--accent-blue); color:#000; padding:2px 6px; border-radius:8px; margin-left:4px; font-weight:700;">当前绑定</span>' : ''}
+                ${!isBound && isClose ? '<span style="font-size:10px; background:linear-gradient(135deg,#f97316,#ef4444); color:#fff; padding:2px 6px; border-radius:8px; margin-left:4px; font-weight:700;">🔥 贴近距离</span>' : ''}
+              </div>
+              <div class="dev-mac">${dev.mac}</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:12px;">
+              <div class="dev-rssi">${dev.rssi} dBm</div>
+              ${isBound ? 
+                '<button class="btn btn-secondary" style="padding:4px 8px; font-size:11px;" disabled>已绑定</button>' : 
+                `<button class="btn btn-primary" style="padding:4px 10px; font-size:11px;" onclick="bindDevice('${dev.mac}', '${displayName}')">绑定</button>`
+              }
+            </div>
+          </div>
+        `;
+      });
+      container.innerHTML = html;
+    }
+
+    async function bindDevice(mac, defaultName) {
+      const suggestName = (defaultName && defaultName !== 'BLE 广播外设') ? defaultName : '我的随身手环/手机';
+      const customName = prompt(`🎯 绑定离席钥匙设备\nMAC 地址: ${mac}\n\n请输入设备备注名（方便日后辨识）：`, suggestName);
+      if (customName === null) return; // 用户点击取消
+
+      const finalName = customName.trim() || suggestName;
+      try {
+        const res = await fetch('/api/ble/bind', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `mac=${encodeURIComponent(mac)}&name=${encodeURIComponent(finalName)}`
+        });
+        const d = await res.json();
+        showToast(d.msg || `成功绑定: ${finalName}`);
+        refreshBleDevices();
+        fetchStatus();
+      } catch (e) {
+        showToast('绑定请求失败');
+      }
+    }
+
+    async function unbindDevice() {
+      if (!confirm('确定要解除当前设备的绑定吗？解除后电脑将不会自动触发锁屏。')) return;
+      try {
+        const res = await fetch('/api/ble/unbind', { method: 'POST' });
+        const d = await res.json();
+        showToast(d.msg || '已解除绑定');
+        refreshBleDevices();
+        fetchStatus();
+      } catch (e) {
+        showToast('解绑失败');
+      }
+    }
+
+    function bindManualMac() {
+      const mac = document.getElementById('manualMacInput').value.trim();
+      if (!mac || mac.length !== 17) {
+        alert('请输入有效的 17 位 MAC 地址，如 AA:BB:CC:11:22:33');
+        return;
+      }
+      bindDevice(mac, '手动指定外设');
+    }
+
+    async function startPhonePairing() {
+      try {
+        const res = await fetch('/api/ble/phone_pair/start', { method: 'POST' });
+        const d = await res.json();
+        showToast(d.msg || '手机配对广播已开启 (ProximityLock-配对)');
+        fetchStatus();
+      } catch (e) {
+        showToast('开启配对模式失败');
+      }
+    }
+
+    async function stopPhonePairing() {
+      try {
+        const res = await fetch('/api/ble/phone_pair/stop', { method: 'POST' });
+        const d = await res.json();
+        showToast(d.msg || '已退出手机配对模式');
+        document.getElementById('incomingPairModal')?.classList.remove('active');
+        fetchStatus();
+      } catch (e) {
+        showToast('退出失败');
+      }
+    }
+
+    async function confirmIncomingPair() {
+      const aliasInput = document.getElementById('modalDeviceAlias');
+      const alias = (aliasInput ? aliasInput.value.trim() : '') || '我的随身手机';
+      try {
+        const res = await fetch('/api/ble/phone_pair/confirm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'name=' + encodeURIComponent(alias)
+        });
+        const d = await res.json();
+        document.getElementById('incomingPairModal')?.classList.remove('active');
+        showToast(d.msg || '绑定成功！');
+        fetchStatus();
+      } catch (e) {
+        showToast('绑定请求失败');
+      }
+    }
+
+    async function rejectIncomingPair() {
+      try {
+        await fetch('/api/ble/phone_pair/reject', { method: 'POST' });
+      } catch (e) {}
+      document.getElementById('incomingPairModal')?.classList.remove('active');
+      showToast('已忽略本次连接');
+      fetchStatus();
+    }
+
+    async function startPairMode() {
+      try {
+        const res = await fetch('/api/ble/start_pair', { method: 'POST' });
+        const d = await res.json();
+        showToast(d.msg || '贴近配对已启动，请将手表/手机贴近板子！');
+        fetchStatus();
+      } catch (e) {
+        showToast('启动配对失败');
+      }
+    }
+
+    function onAutoUnlockToggleChange(userAction = true) {
+      const toggle = document.getElementById('autoUnlockToggle');
+      const badge = document.getElementById('autoUnlockBadge');
+      const desc = document.getElementById('autoUnlockDesc');
+      const pwdInput = document.getElementById('unlockPwdInput');
+      const tip = document.getElementById('pwdStatusTip');
+      const pwdHint = document.getElementById('pwdHelpHint');
+
+      const isEnabled = toggle ? toggle.checked : true;
+      if (badge) {
+        badge.innerText = isEnabled ? '已开启自动解锁' : '仅点亮屏幕 (未开启解锁)';
+        badge.style.background = isEnabled ? 'rgba(34, 197, 94, 0.15)' : 'rgba(234, 179, 8, 0.15)';
+        badge.style.color = isEnabled ? 'var(--accent-green)' : 'var(--accent-yellow)';
+      }
+      if (desc) {
+        desc.innerText = isEnabled
+          ? '开启：回到电脑旁自动唤醒并解锁（若有密码则自动输入）；关闭：回到电脑旁仅点亮屏幕，不输入密码'
+          : '当前关闭：回到电脑旁时仅唤醒显示器（发送无害Shift键），绝不自动输入密码或敲回车！';
+      }
+      if (pwdInput) {
+        pwdInput.style.opacity = isEnabled ? '1.0' : '0.65';
+      }
+      if (tip) {
+        if (!isEnabled) {
+          tip.innerText = '当前为仅亮屏模式 (不解锁)';
+          tip.style.color = 'var(--accent-yellow)';
+        } else {
+          const hasPwd = pwdInput && pwdInput.value.length > 0;
+          tip.innerText = hasPwd ? '已配置密码 (自动输入)' : '未设密码 (直接拉起回车)';
+          tip.style.color = hasPwd ? 'var(--accent-green)' : 'var(--accent-blue)';
+        }
+      }
+    }
+
+    async function loadSettings() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        if (data.lock_rssi !== undefined) {
+          document.getElementById('sliderLockRssi').value = data.lock_rssi;
+          document.getElementById('sliderUnlockRssi').value = data.unlock_rssi;
+          document.getElementById('sliderTimeout').value = data.timeout_ms;
+          selectOS(data.os_mode);
+          updateSettingsPreview();
+        }
+        if (data.auto_unlock !== undefined) {
+          const toggle = document.getElementById('autoUnlockToggle');
+          if (toggle) toggle.checked = (data.auto_unlock === true || data.auto_unlock === 1);
+        }
+        if (data.unlock_pwd !== undefined) {
+          const pwdInput = document.getElementById('unlockPwdInput');
+          if (pwdInput) pwdInput.value = data.unlock_pwd;
+        }
+        onAutoUnlockToggleChange(false);
+      } catch (e) {}
+    }
+
+    function togglePasswordVisibility() {
+      const input = document.getElementById('unlockPwdInput');
+      if (input) {
+        input.type = input.type === 'password' ? 'text' : 'password';
+      }
+    }
+
+    async function saveUnlockPassword() {
+      await saveSettings();
+    }
+
+    async function testUnlockPassword() {
+      const toggle = document.getElementById('autoUnlockToggle');
+      const isEnabled = toggle ? toggle.checked : true;
+      if (!isEnabled) {
+        showToast('当前未开启自动解锁，发送仅亮屏唤醒信号...');
+        await triggerAction('wake');
+      } else {
+        showToast('正在发送开屏解锁测试信号 (等候800ms亮屏后键入)...');
+        await triggerAction('unlock');
+      }
+    }
+
+    async function saveSettings() {
+      const lockVal = parseInt(document.getElementById('sliderLockRssi').value);
+      const unlockVal = parseInt(document.getElementById('sliderUnlockRssi').value);
+      const timeoutVal = parseInt(document.getElementById('sliderTimeout').value);
+      const pwdVal = document.getElementById('unlockPwdInput')?.value || '';
+      const autoUnlockVal = document.getElementById('autoUnlockToggle')?.checked ? '1' : '0';
+
+      try {
+        const res = await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `lock_rssi=${encodeURIComponent(lockVal)}&unlock_rssi=${encodeURIComponent(unlockVal)}&timeout_ms=${encodeURIComponent(timeoutVal)}&os_mode=${encodeURIComponent(currentOS)}&unlock_pwd=${encodeURIComponent(pwdVal)}&auto_unlock=${encodeURIComponent(autoUnlockVal)}`
+        });
+        const d = await res.json();
+        if (d.ok) {
+          showToast(d.msg || '配置参数已持久化保存！');
+          await loadSettings();
+          fetchStatus();
+        } else {
+          showToast('保存失败: ' + (d.msg || ''));
+        }
+      } catch (e) {
+        showToast('保存请求异常');
+      }
+    }
+
+    async function scanWifi() {
+      const select = document.getElementById('wifiSsidSelect');
+      select.innerHTML = '<option value="">正在快速扫描周边 WiFi (约需 1~2 秒)...</option>';
+
+      try {
+        const res = await fetch('/api/wifi/scan');
+        const list = await res.json();
+        if (!list || list.length === 0) {
+          select.innerHTML = '<option value="">未找到 Wi-Fi 信号，请重试或直接在下方填写</option>';
+          showToast('未找到有效 Wi-Fi 信号，请重试或直接手动输入');
+          return;
+        }
+
+        let html = '<option value="">-- 请选择扫描到的 Wi-Fi (按信号排序) --</option>';
+        list.forEach(w => {
+          const icon = w.secure ? '🔒' : '🔓';
+          html += `<option value="${w.ssid}">${icon} ${w.ssid} (${w.rssi} dBm)</option>`;
+        });
+        select.innerHTML = html;
+        showToast(`扫描完成，发现 ${list.length} 个 Wi-Fi 路由器`);
+      } catch (e) {
+        select.innerHTML = '<option value="">扫描未能完成，可直接在下方输入框填写</option>';
+        showToast('扫描超时，可直接在下方手动输入 Wi-Fi 名称');
+      }
+    }
+
+    function onSsidSelected() {
+      const val = document.getElementById('wifiSsidSelect').value;
+      if (val) document.getElementById('wifiSsidInput').value = val;
+    }
+
+    async function saveWifi() {
+      const ssid = document.getElementById('wifiSsidInput').value.trim();
+      const pass = document.getElementById('wifiPassInput').value.trim();
+
+      if (!ssid) {
+        alert('请输入或选择 Wi-Fi 名称');
+        return;
+      }
+
+      if (!confirm(`确认连接 Wi-Fi: [${ssid}]？配置保存后板子将尝试联网。`)) return;
+
+      try {
+        const res = await fetch('/api/wifi/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `ssid=${encodeURIComponent(ssid)}&pass=${encodeURIComponent(pass)}`
+        });
+        const d = await res.json();
+        showToast('Wi-Fi凭证已保存，正在向路由器请求内网 IP...');
+
+        // 持续轮询直至联网获取内网 IP
+        let checkCount = 0;
+        const checkTimer = setInterval(async () => {
+          checkCount++;
+          try {
+            const sRes = await fetch('/api/status');
+            const sData = await sRes.json();
+            renderDashboard(sData);
+
+            if (sData.wifi && sData.wifi.connected) {
+              clearInterval(checkTimer);
+              showToast(`🎉 成功接入 Wi-Fi！内网 IP: http://${sData.wifi.sta_ip}`);
+            } else if (checkCount >= 16) {
+              clearInterval(checkTimer);
+              showToast('连接超时，请检查密码或 Wi-Fi 信号强度');
+            }
+          } catch (err) {}
+        }, 1200);
+
+      } catch (e) {
+        showToast('保存失败');
+      }
+    }
+
+    async function resetWifi() {
+      if (!confirm('确定要清除已保存的 Wi-Fi 凭证吗？板子将恢复为纯直连 AP 热点模式。')) return;
+      try {
+        const res = await fetch('/api/wifi/reset', { method: 'POST' });
+        const d = await res.json();
+        showToast(d.msg || '已重置 Wi-Fi 配置');
+        fetchStatus();
+      } catch (e) {
+        showToast('重置失败');
+      }
+    }
+
+    async function rebootSystem() {
+      if (!confirm('确定要重启 ESP32-S3 吗？')) return;
+      try {
+        await fetch('/api/system/reboot', { method: 'POST' });
+        showToast('正在重启板子，请稍候约 5 秒后刷新网页...');
+      } catch (e) {
+        showToast('重启指令已发送');
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      fetchStatus();
+      loadSettings();
+      pollInterval = setInterval(fetchStatus, 1000);
+    });
+  </script>
+</body>
+</html>
