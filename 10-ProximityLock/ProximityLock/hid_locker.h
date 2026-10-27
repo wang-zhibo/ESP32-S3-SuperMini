@@ -21,6 +21,9 @@ public:
 
     // 发送测试组合键
     void testCurrent(OperatingSystem os);
+
+    // 检查当前固件是否成功启用了 TinyUSB 键盘驱动 (ARDUINO_USB_MODE == 0)
+    bool isTinyUSBEnabled() const;
 };
 
 extern HIDLocker Locker;

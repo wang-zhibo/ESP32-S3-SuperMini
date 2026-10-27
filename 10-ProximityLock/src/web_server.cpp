@@ -86,6 +86,9 @@ void WebService::registerRoutes() {
         json += "\"unlock_pwd\":\"" + g_unlockPassword + "\",";
         json += "\"has_unlock_pwd\":" + String(g_unlockPassword.length() > 0 ? "true" : "false") + ",";
         json += "\"auto_unlock\":" + String(g_autoUnlockEnabled ? "true" : "false") + ",";
+        json += "\"usb_hid_ready\":" + String(Locker.isTinyUSBEnabled() ? "true" : "false") + ",";
+        json += "\"companion_connected\":" + String(Tracker.isCompanionConnected() ? "true" : "false") + ",";
+        json += "\"companion_bonded\":" + String(Tracker.hasBondedCompanion() ? "true" : "false") + ",";
         
         json += "\"incoming_pair\":{";
         json += "\"active\":" + String(Tracker.isPhonePairModeActive() ? "true" : "false") + ",";
@@ -380,6 +383,18 @@ void WebService::registerRoutes() {
         sendJsonHeaders(_server);
         WiFiMgr.resetWiFiConfig();
         _server.send(200, "application/json", "{\"ok\":true,\"msg\":\"已恢复纯 AP 热点直连模式\"}");
+    });
+
+    // 14.1 手动切换/唤醒 AP 热点
+    _server.on("/api/wifi/ap/toggle", HTTP_POST, [this]() {
+        sendJsonHeaders(_server);
+        if (WiFiMgr.isAPActive()) {
+            WiFiMgr.disableAP();
+            _server.send(200, "application/json", "{\"ok\":true,\"msg\":\"已主动关闭板载 AP 热点以省电降温\"}");
+        } else {
+            WiFiMgr.enableAP();
+            _server.send(200, "application/json", "{\"ok\":true,\"msg\":\"已唤醒板载 AP 热点 (30秒内无连接将自动关闭节能)\"}");
+        }
     });
 
     // 15. 系统软重启

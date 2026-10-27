@@ -490,34 +490,23 @@
 
     <!-- Tab 2: BLE Device Pairing -->
     <div id="tab-ble" class="tab-content">
-      <!-- 方式一：手机主动连接配对 (最推荐) -->
+      <!-- 方式一：手机/手表直连配对伴侣 (最推荐) -->
       <div class="card" style="border-color: rgba(56, 189, 248, 0.4); background: linear-gradient(180deg, rgba(14, 165, 233, 0.08) 0%, rgba(15, 23, 42, 0.7) 100%);">
         <div class="card-title" style="color:var(--accent-blue);">
-          <span>📱 方式一：手机主动点击连接配对 (最推荐·零误绑)</span>
-          <span id="phonePairStatusBadge" style="font-size:11px; padding:2px 8px; border-radius:10px; background:rgba(255,255,255,0.06); color:var(--text-sub);">未开启</span>
+          <span>📱 方式一：手机/手表直连伴侣配对 (强烈推荐·彻底解决MAC变动与黑屏断连)</span>
+          <span id="companionStatusBadge" style="font-size:11px; padding:2px 8px; border-radius:10px; background:rgba(255,255,255,0.06); color:var(--text-sub);">等待连接</span>
         </div>
         <div style="font-size:12px; color:#cbd5e1; line-height:1.6; margin-bottom:12px;">
-          💡 <b>最简单的绑定方式</b>：无需在长长的蓝牙列表中辨别设备名称！<br>
-          1. 点击下方【开启手机连接配对】<br>
-          2. 打开手机<b>【系统设置】→【蓝牙】</b>，在可用设备中点击连接 <b>ProximityLock-配对</b><br>
-          3. 页面将立即弹出设备 MAC 地址与确认框，点击【确认绑定】即可完成！
+          ⭐ <b>全平台最强保镖模式（通杀 iPhone / Apple Watch / 安卓手机与手表）</b>：<br>
+          1. 打开您的手机或手表的<b>【系统设置】→【蓝牙】</b>；<br>
+          2. 在可用设备列表中搜索并点击连接：<b style="color:var(--accent-blue); font-size:14px; font-family:monospace; background:rgba(56, 189, 248, 0.15); padding:2px 8px; border-radius:4px; display:inline-block; margin:2px 0;">ProximityLock-伴侣</b>；<br>
+          3. 屏幕弹出系统配对窗口时，直接点击<b>【配对】</b>即可建立安全受信任连接！<br>
+          4. <b>效果</b>：彻底杜绝 MAC 变动，即使手机黑屏放进口袋也不会断流误锁；走远物理断开即锁，回座自动重连即开！
         </div>
 
-        <div id="phonePairIdleBox">
-          <button class="btn btn-primary btn-block" onclick="startPhonePairing()">📲 开启手机连接配对 (60秒)</button>
-        </div>
-
-        <div id="phonePairActiveBox" style="display:none; background:rgba(15, 23, 42, 0.75); border:1px solid rgba(56, 189, 248, 0.4); border-radius:12px; padding:14px; text-align:center;">
-          <div style="display:inline-block; font-size:24px; animation: pulse 1.5s infinite; margin-bottom:4px;">📡</div>
-          <div style="font-weight:700; color:#fff; font-size:14px; margin-bottom:4px;">ESP32 正在广播蓝牙配对信号...</div>
-          <div style="font-size:12px; color:var(--text-sub); margin-bottom:10px;">
-            请打开手机蓝牙设置，搜索并点击：<br>
-            <b style="color:var(--accent-blue); font-size:14px; font-family:monospace; background:rgba(56, 189, 248, 0.15); padding:2px 8px; border-radius:4px; display:inline-block; margin-top:4px;">ProximityLock-配对</b>
-          </div>
-          <div style="font-size:12px; color:var(--accent-yellow); margin-bottom:12px;" id="phonePairCountdown">
-            等待手机点击连接中... (<span id="phonePairTimerText">60</span>s)
-          </div>
-          <button class="btn btn-secondary" style="padding:6px 16px; font-size:12px;" onclick="stopPhonePairing()">⏹ 取消配对模式</button>
+        <div id="companionConnectedBox" style="display:none; background:rgba(34, 197, 94, 0.1); border:1px solid rgba(34, 197, 94, 0.3); border-radius:12px; padding:12px; text-align:center;">
+          <div style="font-weight:700; color:var(--accent-green); font-size:14px; margin-bottom:4px;">🟢 伴侣长连接已建立并处于安全监护中！</div>
+          <div style="font-size:12px; color:var(--text-sub);" id="companionDetailText">正在走物理连接链路精准测距</div>
         </div>
       </div>
 
@@ -684,10 +673,13 @@
             <div class="info-label">局域网免记 IP 域名 (mDNS)</div>
             <div class="info-value"><a href="http://proximitylock.local" target="_blank" style="color:var(--accent-green); text-decoration:none;">http://proximitylock.local ↗</a></div>
           </div>
-          <div class="info-box" style="grid-column: 1 / -1;">
-            <div class="info-label">板载备用直连热点 (AP IP)</div>
-            <div class="info-value"><a href="http://192.168.4.1" target="_blank" style="color:#94a3b8; text-decoration:none;">http://192.168.4.1 ↗</a></div>
-            <div style="font-size:11px; color:var(--text-sub); margin-top:3px;" id="wifiApNameDisplay">热点名称: 读取中...</div>
+          <div class="info-box" style="grid-column: 1 / -1; display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <div class="info-label">板载备用直连热点 (AP IP)</div>
+              <div class="info-value"><a href="http://192.168.4.1" target="_blank" style="color:#94a3b8; text-decoration:none;">http://192.168.4.1 ↗</a></div>
+              <div style="font-size:11px; color:var(--text-sub); margin-top:3px;" id="wifiApNameDisplay">热点名称: 读取中...</div>
+            </div>
+            <button class="btn btn-secondary" style="padding:4px 10px; font-size:12px;" onclick="toggleAp()">📶 唤醒/关闭 AP</button>
           </div>
         </div>
       </div>
@@ -876,7 +868,13 @@
 
       document.getElementById('dashLastSeen').innerText = data.last_seen_sec > 3600 ? '无信号' : ('最后收到: ' + data.last_seen_sec + ' 秒前');
       document.getElementById('dashBoundName').innerText = data.bound_name || '蓝牙身份设备';
-      document.getElementById('dashBoundMac').innerText = data.bound_mac || '未绑定';
+      let macDisplay = data.bound_mac || '未绑定';
+      if (data.companion_connected) {
+        macDisplay = `${data.bound_mac} (🟢 伴侣长连接直连保活)`;
+      } else if (data.companion_bonded) {
+        macDisplay = `${data.bound_mac} (🟡 等待伴侣回座自动重连)`;
+      }
+      document.getElementById('dashBoundMac').innerText = macDisplay;
 
       const upMins = Math.floor(data.uptime_sec / 60);
       document.getElementById('dashUptime').innerText = '运行时间: ' + (upMins > 60 ? (Math.floor(upMins/60) + '小时' + (upMins%60) + '分') : (upMins + '分钟'));
@@ -890,43 +888,32 @@
         btnPause.style.borderColor = 'var(--card-border)';
       }
 
-      // 手机主动连接配对模式状态更新
-      const pairInfo = data.incoming_pair || {};
-      const idleBox = document.getElementById('phonePairIdleBox');
-      const activeBox = document.getElementById('phonePairActiveBox');
-      const badge = document.getElementById('phonePairStatusBadge');
-      const timerText = document.getElementById('phonePairTimerText');
-      const modal = document.getElementById('incomingPairModal');
-      const modalMac = document.getElementById('modalIncomingMac');
-
-      if (pairInfo.active) {
-        if (idleBox) idleBox.style.display = 'none';
-        if (activeBox) activeBox.style.display = 'block';
-        if (badge) {
-          badge.innerText = '等待连接中 (' + (pairInfo.remain_sec || 0) + 's)';
-          badge.style.background = 'rgba(56, 189, 248, 0.2)';
-          badge.style.color = 'var(--accent-blue)';
+      // 伴侣直连状态更新
+      const compBadge = document.getElementById('companionStatusBadge');
+      const compConnectedBox = document.getElementById('companionConnectedBox');
+      const compDetailText = document.getElementById('companionDetailText');
+      if (data.companion_connected) {
+        if (compBadge) {
+          compBadge.innerText = '🟢 已直连保活';
+          compBadge.style.background = 'rgba(34, 197, 94, 0.2)';
+          compBadge.style.color = 'var(--accent-green)';
         }
-        if (timerText) timerText.innerText = pairInfo.remain_sec || 0;
-
-        // 如果检测到手机发起了连接请求，弹出模态确认对话框
-        if (pairInfo.has_request && pairInfo.mac) {
-          if (modal && !modal.classList.contains('active')) {
-            if (modalMac) modalMac.innerText = pairInfo.mac;
-            modal.classList.add('active');
-          }
+        if (compConnectedBox) compConnectedBox.style.display = 'block';
+        if (compDetailText) compDetailText.innerText = `设备: ${data.bound_name} (${data.bound_mac}) | 实时物理链路信号: ${data.current_rssi} dBm`;
+      } else if (data.companion_bonded) {
+        if (compBadge) {
+          compBadge.innerText = '🟡 等待回座重连';
+          compBadge.style.background = 'rgba(251, 191, 36, 0.2)';
+          compBadge.style.color = 'var(--accent-yellow)';
         }
+        if (compConnectedBox) compConnectedBox.style.display = 'none';
       } else {
-        if (idleBox) idleBox.style.display = 'block';
-        if (activeBox) activeBox.style.display = 'none';
-        if (badge) {
-          badge.innerText = '未开启';
-          badge.style.background = 'rgba(255,255,255,0.06)';
-          badge.style.color = 'var(--text-sub)';
+        if (compBadge) {
+          compBadge.innerText = '等待在手机/手表蓝牙中连接';
+          compBadge.style.background = 'rgba(255,255,255,0.06)';
+          compBadge.style.color = 'var(--text-sub)';
         }
-        if (modal && !pairInfo.has_request) {
-          modal.classList.remove('active');
-        }
+        if (compConnectedBox) compConnectedBox.style.display = 'none';
       }
 
       // Net Info & WiFi Status Updates
@@ -958,13 +945,15 @@
 
       let apStatusStr = '';
       if (wifi.ap_active) {
-        if (wifi.ap_remain_sec > 0) {
-          apStatusStr = `运行中 (稳定 ${wifi.ap_remain_sec} 秒后自动关闭节能)`;
+        if (wifi.ap_remain_sec > 0 && wifi.ap_remain_sec < 999) {
+          apStatusStr = `运行中 (无连接 ${wifi.ap_remain_sec} 秒后自动关闭节能)`;
+        } else if (wifi.ap_remain_sec >= 999) {
+          apStatusStr = '运行中 (客户端已连接)';
         } else {
           apStatusStr = '运行中 (192.168.4.1)';
         }
       } else {
-        apStatusStr = '已休眠关闭 (节能省电，断网时自动唤醒)';
+        apStatusStr = '已休眠关闭 (无设备连接，已关闭射频降温节能)';
       }
 
       if (staIpDisp && ssidDisp) {
@@ -1422,6 +1411,17 @@
         fetchStatus();
       } catch (e) {
         showToast('重置失败');
+      }
+    }
+
+    async function toggleAp() {
+      try {
+        const res = await fetch('/api/wifi/ap/toggle', { method: 'POST' });
+        const d = await res.json();
+        showToast(d.msg || '操作成功');
+        fetchStatus();
+      } catch (e) {
+        showToast('AP切换请求失败: ' + e.message, true);
       }
     }
 

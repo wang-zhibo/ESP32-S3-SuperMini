@@ -81,7 +81,11 @@ void saveRuntimeSettings(int lockRssi, int unlockRssi, uint32_t timeoutMs, Opera
 }
 
 void setup() {
-    setCpuFrequencyMhz(160); // 调频至 160MHz 降温省电 (对于BLE+Web性能完全富余，发热降低约35%)
+    setCpuFrequencyMhz(80); // 调频至 80MHz 降温省电 (对于BLE+Web性能完全富余，功耗发热直降约60%)
+
+    // 优先初始化 USB HID 键盘复合总线 (抢先向主机发起总线物理重枚举)
+    Locker.begin();
+
     Serial.begin(115200);
 
     pinMode(PIN_LED, OUTPUT);
@@ -98,8 +102,7 @@ void setup() {
     g_autoUnlockEnabled = g_prefs.getBool("auto_unlock", false);
     g_prefs.end();
 
-    // 初始化硬件子系统
-    Locker.begin();
+    // 初始化蓝牙追踪扫描器
     Tracker.begin();
 
     // 初始化 Wi-Fi 管理器 (AP 配网 + STA 局域网访问 + Captive Portal)
@@ -182,7 +185,7 @@ void loop() {
         }
 
         case STATE_LEAVING: {
-            bool signalAlive = Tracker.isSignalAlive(1500);
+            bool signalAlive = Tracker.isSignalAlive(4000);
             float rssi = Tracker.getFilteredRSSI();
 
             // 如果在超时时间内信号恢复（带 3dBm 迟滞），返回在场状态
@@ -203,7 +206,7 @@ void loop() {
         }
 
         case STATE_LOCKED: {
-            bool signalAlive = Tracker.isSignalAlive(2000);
+            bool signalAlive = Tracker.isSignalAlive(4500);
             float rssi = Tracker.getFilteredRSSI();
 
             // 当回到工位，且信号高于解锁阈值

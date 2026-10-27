@@ -11,10 +11,19 @@ HIDLocker::HIDLocker() {}
 
 void HIDLocker::begin() {
 #if ARDUINO_USB_MODE == 0
+    Serial.println("✅ [HID] TinyUSB 物理键盘总线初始化...");
     Keyboard.begin();
     USB.begin();
 #else
-    Serial.println("⚠️ [HID] 提示: 当前编译选项未启用 TinyUSB (ARDUINO_USB_MODE != 0)。若需物理锁屏按键，请在 IDE 菜单将 USB Mode 选为 'USB-OTG (TinyUSB)'。");
+    Serial.println("⚠️ [HID] 警告: 当前编译选项未启用 TinyUSB (ARDUINO_USB_MODE != 0)。若需物理锁屏按键，请在 IDE 菜单将 USB Mode 选为 'USB-OTG (TinyUSB)'。");
+#endif
+}
+
+bool HIDLocker::isTinyUSBEnabled() const {
+#if ARDUINO_USB_MODE == 0
+    return true;
+#else
+    return false;
 #endif
 }
 

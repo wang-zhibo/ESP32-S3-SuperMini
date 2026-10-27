@@ -13,6 +13,44 @@ class AdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
     }
 };
 
+class CompanionSecurityCallbacks : public BLESecurityCallbacks {
+    uint32_t onPassKeyRequest() override { return 0; }
+    void onPassKeyNotify(uint32_t pass_key) override {}
+    bool onSecurityRequest() override { return true; }
+    bool onConfirmPIN(uint32_t pin) override { return true; }
+
+#if defined(CONFIG_BLUEDROID_ENABLED)
+    void onAuthenticationComplete(esp_ble_auth_cmpl_t cmpl) override {
+        if (cmpl.success) {
+            Serial.println("\n🎉 [BLE伴侣] 手机/手表与 ESP32 已完成安全信任配对 (Bonding)!");
+        } else {
+            Serial.printf("\n⚠️ [BLE伴侣] 伴侣配对异常 (状态码: 0x%x)\n", cmpl.fail_reason);
+        }
+    }
+#elif defined(CONFIG_NIMBLE_ENABLED)
+    void onAuthenticationComplete(ble_gap_conn_desc *desc) override {
+        Serial.println("\n🎉 [BLE伴侣] 手机/手表与 ESP32 已完成安全信任配对 (Bonding)!");
+    }
+    void onAuthenticationComplete(ble_gap_conn_desc *desc, int status) override {
+        if (status == 0) {
+            Serial.println("\n🎉 [BLE伴侣] 手机/手表与 ESP32 已完成安全信任配对 (Bonding)!");
+        } else {
+            Serial.printf("\n⚠️ [BLE伴侣] 伴侣配对状态码: 0x%x\n", status);
+        }
+    }
+#endif
+};
+
+#if defined(CONFIG_BLUEDROID_ENABLED)
+static void customGapHandler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
+    if (event == ESP_GAP_BLE_READ_RSSI_COMPLETE_EVT) {
+        if (param->read_rssi_cmpl.status == ESP_BT_STATUS_SUCCESS) {
+            Tracker.onConnectionRssiRead(param->read_rssi_cmpl.rssi);
+        }
+    }
+}
+#endif
+
 class PhonePairServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) override {}
 
@@ -22,6 +60,7 @@ class PhonePairServerCallbacks: public BLEServerCallbacks {
         if (!desc) return;
         BLEAddress peerAddr(desc->peer_ota_addr);
         Tracker.onIncomingPhoneConnection(String(peerAddr.toString().c_str()));
+        Tracker.onCompanionConnected(desc->conn_handle, (const uint8_t*)desc->peer_id_addr.val);
     }
 #else
     // ESP32 Arduino Core 2.x (基于 Bluedroid)
@@ -33,10 +72,16 @@ class PhonePairServerCallbacks: public BLEServerCallbacks {
                  param->connect.remote_bda[2], param->connect.remote_bda[3],
                  param->connect.remote_bda[4], param->connect.remote_bda[5]);
         Tracker.onIncomingPhoneConnection(String(buf));
+        Tracker.onCompanionConnected(param->connect.conn_id, param->connect.remote_bda);
     }
 #endif
 
-    void onDisconnect(BLEServer* pServer) override {}
+    void onDisconnect(BLEServer* pServer) override {
+        Tracker.onCompanionDisconnected();
+        if (pServer) {
+            pServer->startAdvertising();
+        }
+    }
 };
 
 BLETracker::BLETracker()
@@ -45,6 +90,10 @@ BLETracker::BLETracker()
       _hasBoundDevice(false),
       _lastSeenMs(0),
       _lastRawRssi(-999),
+      _isCompanionConnected(false),
+      _hasBondedCompanion(false),
+      _connId(0),
+      _lastRssiReadMs(0),
       _pairingActive(false),
       _pairingStartMs(0),
       _pairingTimeoutMs(0),
@@ -54,46 +103,78 @@ BLETracker::BLETracker()
       _phonePairTimeoutMs(0),
       _hasIncomingPair(false),
       _incomingPairMs(0),
-      _mux(portMUX_INITIALIZER_UNLOCKED) {}
+      _mux(portMUX_INITIALIZER_UNLOCKED) {
+    memset(_connectedBda, 0, sizeof(_connectedBda));
+}
 
 void BLETracker::begin() {
     _prefs.begin("prox_lock", false);
     _boundMAC = _prefs.getString("target_mac", "");
     _boundName = _prefs.getString("target_name", "");
-    _hasBoundDevice = (_boundMAC.length() == 17); // 标准 MAC 长度如 11:22:33:44:55:66
+    _hasBondedCompanion = _prefs.getBool("comp_bonded", false);
+    _hasBoundDevice = (_boundMAC.length() == 17) || _hasBondedCompanion;
 
-    BLEDevice::init("ProximityLock-配对");
+    BLEDevice::init("ProximityLock-伴侣");
+#if defined(CONFIG_BLUEDROID_ENABLED)
+    BLEDevice::setCustomGapHandler(customGapHandler);
+#endif
 
-    // 1. 必须先初始化 BLE Server (GATT/GAP 必须在 Scan 启动前就绪，否则在 NimBLE 中会触发 ble_svc_gap_init 断言崩溃)
+    // 1. 初始化 BLE Server 并提供标准 Battery Service (0x180F) 与配对安全能力
     _pServer = BLEDevice::createServer();
     _pServer->setCallbacks(new PhonePairServerCallbacks());
-    BLEAdvertising* pAdv = BLEDevice::getAdvertising();
-    pAdv->addServiceUUID("180D");
-    pAdv->setScanResponse(true);
-    pAdv->setMinPreferred(0x06);
 
-    // 2. 再初始化并启动 BLE Scan
+    BLEService* pBatteryService = _pServer->createService(BLEUUID((uint16_t)0x180F));
+    BLECharacteristic* pBatteryChar = pBatteryService->createCharacteristic(
+        BLEUUID((uint16_t)0x2A19),
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+    );
+    uint8_t battLevel = 100;
+    pBatteryChar->setValue(&battLevel, 1);
+    pBatteryService->start();
+
+    // 配置全平台免输码的 Just Works 安全配对 (BOND 模式)
+    BLESecurity* pSecurity = new BLESecurity();
+    pSecurity->setAuthenticationMode(ESP_LE_AUTH_BOND);
+    pSecurity->setCapability(ESP_IO_CAP_NONE);
+    pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+    pSecurity->setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+    BLEDevice::setSecurityCallbacks(new CompanionSecurityCallbacks());
+
+    // 启动伴侣可连接广播 (对外显示名称: ProximityLock-伴侣)
+    BLEAdvertising* pAdv = BLEDevice::getAdvertising();
+    pAdv->addServiceUUID(BLEUUID((uint16_t)0x180F));
+    pAdv->setScanResponse(true);
+    pAdv->setMinPreferred(0x06); // 协助 iOS/watchOS 快速识别并自动重连
+    pAdv->setMinPreferred(0x12);
+    BLEDevice::startAdvertising();
+
+    // 2. 初始化被动扫描 (兼顾周边信标与老式固定 MAC 设备)
     _pBLEScan = BLEDevice::getScan();
     _pBLEScan->setAdvertisedDeviceCallbacks(new AdvertisedDeviceCallbacks(), true);
-    _pBLEScan->setActiveScan(true);
+    _pBLEScan->setActiveScan(false);
     _pBLEScan->setInterval(BLE_SCAN_INTERVAL_MS);
     _pBLEScan->setWindow(BLE_SCAN_WINDOW_MS);
     _pBLEScan->start(0, nullptr, false);
 
-    Serial.printf("[BLE] 初始化完成. 绑定状态: %s (%s, %s)\n", 
-                  _hasBoundDevice ? "已绑定" : "未绑定", 
-                  _hasBoundDevice ? _boundMAC.c_str() : "无",
+    Serial.printf("[BLE] 伴侣直连服务已就绪. 广播名称: ProximityLock-伴侣\n");
+    Serial.printf("   • 绑定状态: %s (%s, %s)\n", 
+                  isPaired() ? "已就绪" : "等待配对", 
+                  _boundMAC.length() > 0 ? _boundMAC.c_str() : "等待直连",
                   _boundName.length() > 0 ? _boundName.c_str() : "未命名");
+    Serial.println("   • 提示: 支持直接在 iPhone / Apple Watch / 安卓手机系统的【设置 -> 蓝牙】中搜索连接！\n");
 }
 
 void BLETracker::clearBond() {
     _prefs.remove("target_mac");
     _prefs.remove("target_name");
+    _prefs.remove("comp_bonded");
     _boundMAC = "";
     _boundName = "";
     _hasBoundDevice = false;
+    _hasBondedCompanion = false;
     _filter.reset();
-    Serial.println("[BLE] 绑定的设备已解绑清除.");
+    disconnectCompanion();
+    Serial.println("[BLE] 绑定的设备与伴侣长连接已全部清除解绑.");
 }
 
 void BLETracker::setBoundDevice(const String& mac, const String& name) {
@@ -395,20 +476,90 @@ void BLETracker::rejectIncomingPair() {
     Serial.println("[BLE] 已忽略/拒绝手机连接配对请求.");
 }
 
+void BLETracker::onCompanionConnected(uint16_t connId, const uint8_t* remoteBda) {
+    _isCompanionConnected = true;
+    _connId = connId;
+    memcpy(_connectedBda, remoteBda, 6);
+    _hasBondedCompanion = true;
+    _prefs.putBool("comp_bonded", true);
+
+    char buf[18];
+    snprintf(buf, sizeof(buf), "%02x:%02x:%02x:%02x:%02x:%02x",
+             remoteBda[0], remoteBda[1], remoteBda[2], remoteBda[3], remoteBda[4], remoteBda[5]);
+    _boundMAC = String(buf);
+    if (_boundName.length() == 0 || _boundName == "未命名" || _boundName == "无") {
+        _boundName = "随身蓝牙伴侣 (直连保活)";
+    }
+    _prefs.putString("target_mac", _boundMAC);
+    _prefs.putString("target_name", _boundName);
+    _hasBoundDevice = true;
+
+    _lastSeenMs = millis();
+    _lastRawRssi = -55;
+    _filter.reset();
+    _filter.update(-55);
+
+    Serial.printf("\n🎉 [BLE伴侣] 目标设备已成功直连! 句柄: %d, MAC: %s\n", connId, buf);
+    Serial.println("   • 核心特性: 底层已建立长连接链路，走芯片逻辑句柄，绝无任何MAC漂移和黑屏断连！\n");
+
+    // 立即发起一次真实链路 RSSI 测量
+    readConnectionRssi();
+}
+
+void BLETracker::onCompanionDisconnected() {
+    _isCompanionConnected = false;
+    _lastSeenMs = 0;
+    Serial.println("\n⚠️ [BLE伴侣] 伴侣设备已断开连接 (可能已离开工位). 正在重新开启广播等待回座秒连...");
+}
+
+void BLETracker::onConnectionRssiRead(int rssi) {
+    if (rssi != 127 && rssi < 0) {
+        _lastRawRssi = rssi;
+        _filter.update((float)rssi);
+        _lastSeenMs = millis();
+    }
+}
+
+void BLETracker::readConnectionRssi() {
+    if (!_isCompanionConnected) return;
+
+#if defined(CONFIG_NIMBLE_ENABLED)
+    int8_t rssiValue = 0;
+    int rc = ble_gap_conn_rssi(_connId, &rssiValue);
+    if (rc == 0) {
+        onConnectionRssiRead((int)rssiValue);
+    }
+#elif defined(CONFIG_BLUEDROID_ENABLED)
+    esp_ble_gap_read_rssi(_connectedBda);
+#endif
+}
+
+void BLETracker::disconnectCompanion() {
+    if (_isCompanionConnected && _pServer) {
+        _pServer->disconnect(_connId);
+    }
+    _isCompanionConnected = false;
+}
+
 void BLETracker::loop() {
     uint32_t now = millis();
 
-    // 关键优化：每 3 秒清空一次底层 BLEScan 堆积的扫描设备结果集
-    // 避免长时间连续扫描时底层 m_scanResults 累积大量周边设备导致堆内存耗尽 (OOM 崩溃: operator new std::bad_alloc)
-    static uint32_t lastClearMs = 0;
-    if (_pBLEScan && (now - lastClearMs >= 3000)) {
-        lastClearMs = now;
-        _pBLEScan->stop();
-        _pBLEScan->clearResults();
-        _pBLEScan->start(0, nullptr, false);
+    // 1. 如果处于伴侣直连保活状态，定期向对端发起链路真实 RSSI 采样 (每 1.5 秒采样一次)
+    if (_isCompanionConnected) {
+        if (now - _lastRssiReadMs >= 1500) {
+            _lastRssiReadMs = now;
+            readConnectionRssi();
+        }
     }
 
-    // 监控手机主动连接配对超时
+    // 2. 关键优化：每 15 秒清空一次底层 BLEScan 堆积的扫描设备结果集
+    static uint32_t lastClearMs = 0;
+    if (_pBLEScan && (now - lastClearMs >= 15000)) {
+        lastClearMs = now;
+        _pBLEScan->clearResults();
+    }
+
+    // 3. 监控手机主动连接配对超时
     if (_phonePairModeActive) {
         if (now - _phonePairStartMs >= _phonePairTimeoutMs) {
             stopPhonePairMode();

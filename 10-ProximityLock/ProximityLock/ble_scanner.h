@@ -5,10 +5,20 @@
 #include <BLEUtils.h>
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
+#include <BLESecurity.h>
 #include <Preferences.h>
 #include <vector>
 #include "filter.h"
 #include "config.h"
+
+#if defined(CONFIG_BLUEDROID_ENABLED)
+#include <esp_gap_ble_api.h>
+#include <esp_gatts_api.h>
+#elif defined(CONFIG_NIMBLE_ENABLED)
+#include <host/ble_hs.h>
+#include <host/ble_gap.h>
+#include <nimble/ble.h>
+#endif
 
 struct DiscoveredDevice {
     String   mac;
@@ -23,12 +33,21 @@ public:
     void begin();
     
     // 配对与绑定管理
-    bool isPaired() const { return _hasBoundDevice; }
+    bool isPaired() const { return _hasBoundDevice || _hasBondedCompanion || _isCompanionConnected; }
     String getBoundMAC() const { return _boundMAC; }
     String getBoundName() const { return _boundName; }
     void clearBond();
     void startPairing(uint32_t timeoutMs = 8000);
     bool checkPairingFinished();
+
+    // 伴侣直连保活管理 (专为 iPhone / Apple Watch / 安卓手机与全功能手表打造)
+    bool isCompanionConnected() const { return _isCompanionConnected; }
+    bool hasBondedCompanion() const { return _hasBondedCompanion; }
+    void onCompanionConnected(uint16_t connId, const uint8_t* remoteBda);
+    void onCompanionDisconnected();
+    void onConnectionRssiRead(int rssi);
+    void readConnectionRssi();
+    void disconnectCompanion();
 
     // 手机主动连接配对管理
     void startPhonePairMode(uint32_t timeoutMs = 60000);
@@ -58,12 +77,16 @@ public:
     int   getLastRawRSSI() const { return _lastRawRssi; }
     uint32_t getLastSeenElapsed() const { return millis() - _lastSeenMs; }
     bool  isSignalAlive(uint32_t timeoutMs) const {
+        if (_isCompanionConnected) {
+            return (millis() - _lastSeenMs < timeoutMs);
+        }
         return (_hasBoundDevice && (millis() - _lastSeenMs < timeoutMs));
     }
 
 private:
     friend class AdvertisedDeviceCallbacks;
     friend class PhonePairServerCallbacks;
+    friend class CompanionSecurityCallbacks;
     void onDeviceScanned(BLEAdvertisedDevice* device);
 
     Preferences    _prefs;
@@ -76,6 +99,13 @@ private:
     String         _boundName;
     uint32_t       _lastSeenMs;
     int            _lastRawRssi;
+
+    // 伴侣直连保活链路状态
+    bool           _isCompanionConnected;
+    bool           _hasBondedCompanion;
+    uint16_t       _connId;
+    uint8_t        _connectedBda[6];
+    uint32_t       _lastRssiReadMs;
 
     // 贴近配对模式临时状态
     bool           _pairingActive;

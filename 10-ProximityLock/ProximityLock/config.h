@@ -15,7 +15,7 @@
 // ==========================================
 #define DEFAULT_LOCK_RSSI         -82   // dBm: 当滤波后 RSSI 低于此值，判定为远离离开
 #define DEFAULT_UNLOCK_RSSI       -70   // dBm: 当滤波后 RSSI 高于此值，判定为回到工位
-#define DEFAULT_LEAVE_TIMEOUT_MS  4000  // 毫秒: 连续无信号或低信号超过此时长触发锁屏
+#define DEFAULT_LEAVE_TIMEOUT_MS  6000  // 毫秒: 连续无信号或低信号超过此时长触发锁屏 (约2个3秒周期)
 #define DEFAULT_PAUSE_DURATION_MS (15 * 60 * 1000) // 15分钟临时免打扰挂起
 
 // 周边扫描列表范围限制：仅收录约 1 米以内设备 (RSSI >= -68 dBm)，超过 1 米的远距离设备一律不扫描收录
@@ -24,9 +24,9 @@
 #define ENABLE_TOUCH_PINS         0     // 裸引脚电容触摸开关: 0=关闭(默认, 防止裸板悬空引脚杂讯误触导致循环切换/重启), 1=开启
 #define TOUCH_SENSITIVITY_DELTA   2000  // ESP32-S3 电容触控基准变化敏感度 (S3基数在数万，需设为数千)
 
-// Wi-Fi 与 BLE 共存射频优化调度：给 Wi-Fi 预留 50ms 时间片，消除 Web 请求卡顿
-#define BLE_SCAN_INTERVAL_MS      120   // BLE 扫描间隔 (毫秒)
-#define BLE_SCAN_WINDOW_MS        70    // BLE 扫描窗口 (毫秒)
+// Wi-Fi 与 BLE 共存射频优化调度：低发热省电调度 (每 3 秒扫描一次，扫描窗口 800ms，发热降低 90%)
+#define BLE_SCAN_INTERVAL_MS      3000  // BLE 扫描间隔: 3000 毫秒 (每 3 秒一次)
+#define BLE_SCAN_WINDOW_MS        800   // BLE 扫描窗口: 800 毫秒 (捕获率高且发热极低)
 
 // ==========================================
 // 支持的操作系统目标
