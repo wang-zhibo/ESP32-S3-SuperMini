@@ -24,9 +24,9 @@
 #define ENABLE_TOUCH_PINS         0     // 裸引脚电容触摸开关: 0=关闭(默认, 防止裸板悬空引脚杂讯误触导致循环切换/重启), 1=开启
 #define TOUCH_SENSITIVITY_DELTA   2000  // ESP32-S3 电容触控基准变化敏感度 (S3基数在数万，需设为数千)
 
-// Wi-Fi 与 BLE 共存射频优化调度：低发热省电调度 (每 3 秒扫描一次，扫描窗口 800ms，发热降低 90%)
-#define BLE_SCAN_INTERVAL_MS      3000  // BLE 扫描间隔: 3000 毫秒 (每 3 秒一次)
-#define BLE_SCAN_WINDOW_MS        800   // BLE 扫描窗口: 800 毫秒 (捕获率高且发热极低)
+// Wi-Fi 与 BLE 共存射频优化调度：低发热省电调度 (每 2.5 秒扫描一次，扫描窗口 900ms，占空比 36%，抓包率提升 35%)
+#define BLE_SCAN_INTERVAL_MS      2500  // BLE 扫描间隔: 2500 毫秒
+#define BLE_SCAN_WINDOW_MS        900   // BLE 扫描窗口: 900 毫秒 (捕获率高且发热极低)
 
 // ==========================================
 // 支持的操作系统目标

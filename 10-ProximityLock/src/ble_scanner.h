@@ -76,6 +76,8 @@ public:
 
     // 追踪与距离状态查询
     void loop();
+    bool isAdvertising() const { return _isAdvertising; }
+    void setAdvertisingState(bool adv) { _isAdvertising = adv; }
     float getFilteredRSSI() const { return _filter.get(); }
     int   getLastRawRSSI() const { return _lastRawRssi; }
     uint32_t getLastSeenElapsed() const { return millis() - _lastSeenMs; }
@@ -107,6 +109,7 @@ private:
     // 伴侣直连保活链路状态
     bool           _isCompanionConnected;
     bool           _hasBondedCompanion;
+    bool           _isAdvertising;
     uint16_t       _connId;
     uint8_t        _connectedBda[6];
     uint32_t       _lastRssiReadMs;

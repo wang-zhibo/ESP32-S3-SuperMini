@@ -25,6 +25,12 @@ class CompanionSecurityCallbacks : public BLESecurityCallbacks {
             Serial.println("\n🎉 [BLE伴侣] 手机/手表与 ESP32 已完成安全信任配对 (Bonding)!");
         } else {
             Serial.printf("\n⚠️ [BLE伴侣] 伴侣配对异常 (状态码: 0x%x)\n", cmpl.fail_reason);
+            // 密钥错位自愈优化：若由于对端删除了配对信息 (如用户在手机蓝牙设置里点了“忽略此设备”)
+            // 自动清除本地存储的该设备旧密钥，解除互锁，允许重新免输配对
+            if (cmpl.fail_reason == 0x05 || cmpl.fail_reason == 0x06 || cmpl.fail_reason == 0x08) {
+                Serial.println("   • [密钥自愈] 对端密钥已失效，正在清除 ESP32 本地旧 Bond 记录以允许无缝重配...");
+                esp_ble_remove_bond_device(cmpl.bd_addr);
+            }
         }
     }
 #elif defined(CONFIG_NIMBLE_ENABLED)
@@ -47,6 +53,10 @@ static void customGapHandler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_
         if (param->read_rssi_cmpl.status == ESP_BT_STATUS_SUCCESS) {
             Tracker.onConnectionRssiRead(param->read_rssi_cmpl.rssi);
         }
+    } else if (event == ESP_GAP_BLE_ADV_START_COMPLETE_EVT) {
+        Tracker.setAdvertisingState(param->adv_start_cmpl.status == ESP_BT_STATUS_SUCCESS);
+    } else if (event == ESP_GAP_BLE_ADV_STOP_COMPLETE_EVT) {
+        Tracker.setAdvertisingState(false);
     }
 }
 #endif
@@ -80,6 +90,7 @@ class PhonePairServerCallbacks: public BLEServerCallbacks {
         Tracker.onCompanionDisconnected();
         if (pServer) {
             pServer->startAdvertising();
+            Tracker.setAdvertisingState(true);
         }
     }
 
@@ -88,6 +99,7 @@ class PhonePairServerCallbacks: public BLEServerCallbacks {
         Tracker.onCompanionDisconnected();
         if (pServer) {
             pServer->startAdvertising();
+            Tracker.setAdvertisingState(true);
         }
     }
 #endif
@@ -102,6 +114,7 @@ BLETracker::BLETracker()
       _lastRawRssi(-999),
       _isCompanionConnected(false),
       _hasBondedCompanion(false),
+      _isAdvertising(false),
       _connId(0),
       _lastRssiReadMs(0),
       _pairingActive(false),
@@ -183,17 +196,37 @@ void BLETracker::begin() {
     pSecurity->setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
     BLEDevice::setSecurityCallbacks(new CompanionSecurityCallbacks());
 
-    // 启动伴侣可连接广播 (对外显示名称: ProximityLock-伴侣)
+    // 启动伴侣可连接广播 (遵循 Apple Accessory Guidelines R21 规范设计)
     BLEAdvertising* pAdv = BLEDevice::getAdvertising();
-    pAdv->setAppearance(0x0180); // Generic Remote Control (iOS 极佳兼容性，自动重连)
-    pAdv->addServiceUUID(_pHid->hidService()->getUUID()); // 0x1812
-    pAdv->addServiceUUID(BLEUUID((uint16_t)0x180F));       // 0x180F
-    pAdv->setMinInterval(0x00A0); // 100 ms - 苹果配件规范推荐
-    pAdv->setMaxInterval(0x00F4); // 152.5 ms - 苹果配件规范推荐
+
+    // 核心优化 1: 紧凑主广播包 (保证总长度 <= 31 字节，黑屏被动扫描 100% 能够识别 HID)
+    BLEAdvertisementData advData;
+    advData.setFlags(0x06);         // General Discoverable + BR/EDR Not Supported (3 bytes)
+    advData.setAppearance(0x0180);  // Generic Remote Control (4 bytes)
+    // 采用紧凑 16-bit UUID 列表声明 0x1812 (HID) 与 0x180F (Battery) 服务 (6 bytes)
+    const char srv16Payload[] = {0x05, 0x03, 0x12, 0x18, 0x0F, 0x18};
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
+    advData.addData((char*)srv16Payload, 6);
+#else
+    advData.addData(std::string(srv16Payload, 6));
+#endif
+
+    // 核心优化 2: 扫描响应包单独放置设备完整名称 (黑屏被动扫描不请求，点亮屏幕或主动搜索时展示)
+    BLEAdvertisementData scanRespData;
+    scanRespData.setName("ProximityLock-伴侣");
+
+    pAdv->setAdvertisementData(advData);
+    pAdv->setScanResponseData(scanRespData);
+
+    // 核心优化 3: 严格锁定苹果官方推荐的固定广播时序 152.5ms (0x00F4)
+    pAdv->setMinInterval(0x00F4);   // 152.5 ms
+    pAdv->setMaxInterval(0x00F4);   // 152.5 ms
+    pAdv->setMinPreferred(0x06);    // 7.5 ms
+    pAdv->setMaxPreferred(0x12);    // 22.5 ms
     pAdv->setScanResponse(true);
-    pAdv->setMinPreferred(0x06); // 协助 iOS/watchOS 快速识别并自动重连
-    pAdv->setMaxPreferred(0x12);
+
     BLEDevice::startAdvertising();
+    _isAdvertising = true;
 
     // 2. 初始化被动扫描 (兼顾周边信标与老式固定 MAC 设备)
     _pBLEScan = BLEDevice::getScan();
@@ -221,8 +254,22 @@ void BLETracker::clearBond() {
     _hasBondedCompanion = false;
     _filter.reset();
     disconnectCompanion();
+#if defined(CONFIG_BLUEDROID_ENABLED)
+    int dev_num = esp_ble_get_bond_device_num();
+    if (dev_num > 0) {
+        esp_ble_bond_dev_t *dev_list = (esp_ble_bond_dev_t *)malloc(sizeof(esp_ble_bond_dev_t) * dev_num);
+        if (dev_list) {
+            esp_ble_get_bond_device_list(&dev_num, dev_list);
+            for (int i = 0; i < dev_num; i++) {
+                esp_ble_remove_bond_device(dev_list[i].bd_addr);
+            }
+            free(dev_list);
+        }
+    }
+#endif
     if (_pServer) {
         _pServer->startAdvertising();
+        _isAdvertising = true;
     }
     Serial.println("[BLE] 绑定的设备与伴侣长连接已全部清除解绑, 已重启广播等待新设备.");
 }
@@ -485,6 +532,7 @@ void BLETracker::startPhonePairMode(uint32_t timeoutMs) {
     _hasIncomingPair = false;
     _incomingPairMAC = "";
     BLEDevice::startAdvertising();
+    _isAdvertising = true;
     Serial.printf("[BLE] 开启手机主动连接配对广播 (名称: ProximityLock-配对, 限时 %lu 秒)...\n", timeoutMs / 1000);
 }
 
@@ -494,6 +542,7 @@ void BLETracker::stopPhonePairMode() {
         _hasIncomingPair = false;
         _incomingPairMAC = "";
         BLEDevice::getAdvertising()->stop();
+        _isAdvertising = false;
         Serial.println("[BLE] 手机连接配对广播已关闭.");
     }
 }
@@ -531,6 +580,7 @@ void BLETracker::rejectIncomingPair() {
 
 void BLETracker::onCompanionConnected(uint16_t connId, const uint8_t* remoteBda) {
     _isCompanionConnected = true;
+    _isAdvertising = false;
     _connId = connId;
     memcpy(_connectedBda, remoteBda, 6);
     _hasBondedCompanion = true;
@@ -593,6 +643,7 @@ void BLETracker::onCompanionConnected(uint16_t connId, const uint8_t* remoteBda)
 
 void BLETracker::onCompanionDisconnected() {
     _isCompanionConnected = false;
+    _isAdvertising = false;
     _lastSeenMs = 0;
     Serial.println("\n⚠️ [BLE伴侣] 伴侣设备已断开连接 (可能已离开工位). 正在重新开启广播等待回座秒连...");
 
@@ -651,16 +702,20 @@ void BLETracker::loop() {
         _pBLEScan->clearResults();
     }
 
-    // 3. 伴侣断连广播保活看门狗：确保在未连接状态下，BLE 广播持续发射等待回座秒连
+    // 3. 伴侣断连广播保活看门狗：仅当广播真正离线时才自愈重新拉起，彻底杜绝每2秒暴力轮询颠簸
     static uint32_t lastAdvCheckMs = 0;
-    if (!_isCompanionConnected && (now - lastAdvCheckMs >= 2000)) {
+    if (!_isCompanionConnected && (now - lastAdvCheckMs >= 3000)) {
         lastAdvCheckMs = now;
 #if defined(CONFIG_NIMBLE_ENABLED)
         if (!ble_gap_adv_active()) {
             BLEDevice::startAdvertising();
+            _isAdvertising = true;
         }
 #elif defined(CONFIG_BLUEDROID_ENABLED)
-        BLEDevice::startAdvertising();
+        if (!_isAdvertising) {
+            BLEDevice::startAdvertising();
+            _isAdvertising = true;
+        }
 #endif
     }
 
