@@ -561,6 +561,32 @@ void BLETracker::onCompanionConnected(uint16_t connId, const uint8_t* remoteBda)
         Serial.println("   • [射频优化] 伴侣直连已建立，暂停后台主动扫描，降低芯片发热与 2.4GHz 干扰。");
     }
 
+#if defined(CONFIG_NIMBLE_ENABLED)
+    // 严格遵循 Apple Accessory Design Guidelines 协商连接链路参数
+    // 1) 间隔 15ms~30ms (12~24 * 1.25ms) 获得更高精度的快速 RSSI 采样
+    // 2) 潜伏 0
+    // 3) 监督超时 2000ms (200 * 10ms)，人走远后 2 秒立刻察觉物理断开，雷厉风行触发锁屏！
+    ble_gap_upd_params connParams;
+    memset(&connParams, 0, sizeof(connParams));
+    connParams.itvl_min = 12;
+    connParams.itvl_max = 24;
+    connParams.latency = 0;
+    connParams.supervision_timeout = 200;
+    connParams.min_ce_len = 0;
+    connParams.max_ce_len = 0;
+    ble_gap_update_params(connId, &connParams);
+    Serial.println("   • [链路优化] 已协商优化连接参数: 间隔 15~30ms, 离席断连感知从 20s 缩短至 2s.");
+#elif defined(CONFIG_BLUEDROID_ENABLED)
+    esp_ble_conn_update_params_t connParams;
+    memcpy(connParams.bda, remoteBda, ESP_BD_ADDR_LEN);
+    connParams.min_int = 12;
+    connParams.max_int = 24;
+    connParams.latency = 0;
+    connParams.timeout = 200;
+    esp_ble_gap_update_conn_params(&connParams);
+    Serial.println("   • [链路优化] 已协商优化连接参数: 间隔 15~30ms, 离席断连感知从 20s 缩短至 2s.");
+#endif
+
     // 立即发起一次真实链路 RSSI 测量
     readConnectionRssi();
 }

@@ -27,6 +27,9 @@ public:
 
     // 强制释放所有物理按键状态 (防卡键保底)
     void releaseAll();
+
+    // 检查是否正在后台异步执行开屏与密码输入
+    bool isUnlocking() const;
 };
 
 extern HIDLocker Locker;

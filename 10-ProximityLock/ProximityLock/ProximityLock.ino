@@ -50,6 +50,11 @@ void printHelp();
 void setOSMode(OperatingSystem os);
 
 void saveRuntimeSettings(int lockRssi, int unlockRssi, uint32_t timeoutMs, OperatingSystem os, const String& unlockPwd, bool autoUnlock) {
+    // 关键稳定性防护：强制保证唤醒阈值至少比锁屏阈值大 6dBm，杜绝死区重叠导致的反复横跳
+    if (unlockRssi < lockRssi + 6) {
+        unlockRssi = lockRssi + 6;
+    }
+
     g_lockRSSI = lockRssi;
     g_unlockRSSI = unlockRssi;
     g_leaveTimeoutMs = timeoutMs;
@@ -206,6 +211,16 @@ void loop() {
         }
 
         case STATE_LOCKED: {
+            // 关键安全防抖：锁屏后必须至少静默 6 秒，等待操作系统锁屏动画彻底完成，杜绝边缘横跳与误输密码
+            if (now - g_stateEnterMs < 6000) {
+                break;
+            }
+
+            // 如果正在后台异步击键输入密码，避免重复派发
+            if (Locker.isUnlocking()) {
+                break;
+            }
+
             bool signalAlive = Tracker.isSignalAlive(4500);
             float rssi = Tracker.getFilteredRSSI();
 

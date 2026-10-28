@@ -2,9 +2,76 @@
 #include "USB.h"
 #include "USBHIDKeyboard.h"
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/semphr.h>
+
 #if ARDUINO_USB_MODE == 0
 static USBHIDKeyboard Keyboard;
+static TaskHandle_t s_unlockTaskHandle = NULL;
+static SemaphoreHandle_t s_taskMutex = NULL;
+static volatile bool s_isUnlocking = false;
+static OperatingSystem s_targetOS = OS_WINDOWS;
+static String s_targetPassword = "";
+
+static void unlockWorkerTask(void* param) {
+    while (true) {
+        // 等待解锁唤醒事件通知
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        s_isUnlocking = true;
+        String pwdCopy = "";
+        OperatingSystem osCopy = OS_WINDOWS;
+        if (s_taskMutex && xSemaphoreTake(s_taskMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            pwdCopy = s_targetPassword;
+            osCopy = s_targetOS;
+            xSemaphoreGive(s_taskMutex);
+        }
+
+        Keyboard.releaseAll();
+        if (pwdCopy.length() == 0) {
+            // 无密码模式：轻点 Shift 唤醒 -> 等待亮屏 -> 空格与回车直接进入
+            Keyboard.press(KEY_LEFT_SHIFT);
+            vTaskDelay(pdMS_TO_TICKS(40));
+            Keyboard.release(KEY_LEFT_SHIFT);
+            vTaskDelay(pdMS_TO_TICKS(350));
+
+            Keyboard.press(' ');
+            vTaskDelay(pdMS_TO_TICKS(50));
+            Keyboard.releaseAll();
+            vTaskDelay(pdMS_TO_TICKS(200));
+            Keyboard.press(KEY_RETURN);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            Keyboard.releaseAll();
+        } else {
+            // 有密码模式：轻点 Shift 唤醒 -> 空格滑出输入框 -> 等待焦点 -> 平滑输入密码 -> 回车确认
+            Keyboard.press(KEY_LEFT_SHIFT);
+            vTaskDelay(pdMS_TO_TICKS(40));
+            Keyboard.release(KEY_LEFT_SHIFT);
+            vTaskDelay(pdMS_TO_TICKS(350));
+
+            Keyboard.press(' ');
+            vTaskDelay(pdMS_TO_TICKS(50));
+            Keyboard.releaseAll();
+
+            vTaskDelay(pdMS_TO_TICKS(800)); // 关键硬件延时：等待输入框获取聚焦
+
+            for (size_t i = 0; i < pwdCopy.length(); i++) {
+                Keyboard.write(pwdCopy[i]);
+                vTaskDelay(pdMS_TO_TICKS(25)); // 25ms 击键间隔确保各种操作系统按键缓冲区平滑接收
+            }
+            vTaskDelay(pdMS_TO_TICKS(60));
+
+            Keyboard.press(KEY_RETURN);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            Keyboard.releaseAll();
+        }
+        Keyboard.releaseAll();
+        s_isUnlocking = false;
+    }
+}
 #endif
+
 HIDLocker Locker;
 
 HIDLocker::HIDLocker() {}
@@ -15,6 +82,14 @@ void HIDLocker::begin() {
     Keyboard.begin();
     Keyboard.releaseAll(); // 启动时强制释放全部按键，防暖重启卡键
     USB.begin();
+
+    if (!s_taskMutex) {
+        s_taskMutex = xSemaphoreCreateMutex();
+    }
+    if (!s_unlockTaskHandle) {
+        // 创建后台独立 Worker 任务执行屏幕唤醒与密码输入，主循环零等待
+        xTaskCreatePinnedToCore(unlockWorkerTask, "unlockWorker", 4096, NULL, 1, &s_unlockTaskHandle, 0);
+    }
 #else
     Serial.println("⚠️ [HID] 警告: 当前编译选项未启用 TinyUSB (ARDUINO_USB_MODE != 0)。若需物理锁屏按键，请在 IDE 菜单将 USB Mode 选为 'USB-OTG (TinyUSB)'。");
 #endif
@@ -92,49 +167,24 @@ void HIDLocker::typePassword(const String& password) {
 
 void HIDLocker::unlock(OperatingSystem os, const String& password) {
 #if ARDUINO_USB_MODE == 0
-    Keyboard.releaseAll(); // 解锁前先确保按键状态清零
-    if (password.length() == 0) {
-        // 无密码模式：
-        // 1. 发送无害 Left Shift 唤醒显示器
-        Keyboard.press(KEY_LEFT_SHIFT);
-        delay(40);
-        Keyboard.release(KEY_LEFT_SHIFT);
-        delay(350);
-
-        // 2. 发送空格与回车滑起锁屏壁纸，直接进入桌面
-        Keyboard.press(' ');
-        delay(50);
-        Keyboard.releaseAll();
-        delay(200);
-        Keyboard.press(KEY_RETURN);
-        delay(50);
-        Keyboard.releaseAll();
-    } else {
-        // 有密码模式：
-        // 1. 发送无害 Shift 点亮休眠屏幕
-        Keyboard.press(KEY_LEFT_SHIFT);
-        delay(40);
-        Keyboard.release(KEY_LEFT_SHIFT);
-        delay(350);
-
-        // 2. 发送空格键滑起锁屏壁纸（Windows/GNOME 遮罩需要一次击键唤醒输入框）
-        Keyboard.press(' ');
-        delay(50);
-        Keyboard.releaseAll();
-
-        // 3. 关键硬件延时：等待显示器亮屏且密码输入框获得焦点 (通常需 700~900ms)
-        delay(800);
-
-        // 4. 逐字符平滑输入密码
-        typePassword(password);
-        delay(60);
-
-        // 5. 敲击回车确认登录
-        Keyboard.press(KEY_RETURN);
-        delay(50);
-        Keyboard.releaseAll();
+    if (s_isUnlocking) return; // 正在异步解锁中，避免并发重复触发
+    
+    if (s_taskMutex && xSemaphoreTake(s_taskMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        s_targetOS = os;
+        s_targetPassword = password;
+        xSemaphoreGive(s_taskMutex);
     }
-    Keyboard.releaseAll(); // 解锁结束双重保底
+    if (s_unlockTaskHandle) {
+        xTaskNotifyGive(s_unlockTaskHandle);
+    }
+#endif
+}
+
+bool HIDLocker::isUnlocking() const {
+#if ARDUINO_USB_MODE == 0
+    return s_isUnlocking;
+#else
+    return false;
 #endif
 }
 
