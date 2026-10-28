@@ -50,6 +50,11 @@ void printHelp();
 void setOSMode(OperatingSystem os);
 
 void saveRuntimeSettings(int lockRssi, int unlockRssi, uint32_t timeoutMs, OperatingSystem os, const String& unlockPwd, bool autoUnlock) {
+    // 关键稳定性防护：强制保证唤醒阈值至少比锁屏阈值大 6dBm，杜绝死区重叠导致的反复横跳
+    if (unlockRssi < lockRssi + 6) {
+        unlockRssi = lockRssi + 6;
+    }
+
     g_lockRSSI = lockRssi;
     g_unlockRSSI = unlockRssi;
     g_leaveTimeoutMs = timeoutMs;
@@ -172,6 +177,17 @@ void loop() {
             break;
 
         case STATE_PRESENT: {
+            // 关键优化 1: 如果后台正在执行开屏/打密码，绝对禁止检测离席
+            if (Locker.isUnlocking()) {
+                break;
+            }
+
+            // 关键优化 2: 回座解锁后的“在场保护冷静期 (Grace Period)”
+            // 刚坐下 8 秒内，人体遮挡或信标重连可能导致瞬态掉包或信号抖动，坚决不进入 LEAVING
+            if (now - g_stateEnterMs < 8000) {
+                break;
+            }
+
             bool signalAlive = Tracker.isSignalAlive(g_leaveTimeoutMs);
             float rssi = Tracker.getFilteredRSSI();
 
@@ -185,12 +201,20 @@ void loop() {
         }
 
         case STATE_LEAVING: {
+            // 关键互斥: 若后台正在开屏/打密码，立即打断离开状态，恢复在场
+            if (Locker.isUnlocking()) {
+                g_state = STATE_PRESENT;
+                g_stateEnterMs = now;
+                break;
+            }
+
             bool signalAlive = Tracker.isSignalAlive(4000);
             float rssi = Tracker.getFilteredRSSI();
 
             // 如果在超时时间内信号恢复（带 3dBm 迟滞），返回在场状态
             if (signalAlive && rssi >= (float)(g_lockRSSI + 3)) {
                 g_state = STATE_PRESENT;
+                g_stateEnterMs = now;
                 Serial.println("[状态] 信号恢复，取消锁屏，保持在场.");
                 break;
             }
@@ -206,6 +230,16 @@ void loop() {
         }
 
         case STATE_LOCKED: {
+            // 关键安全防抖：锁屏后必须至少静默 6 秒，等待操作系统锁屏动画彻底完成，杜绝边缘横跳与误输密码
+            if (now - g_stateEnterMs < 6000) {
+                break;
+            }
+
+            // 如果正在后台异步击键输入密码，避免重复派发
+            if (Locker.isUnlocking()) {
+                break;
+            }
+
             bool signalAlive = Tracker.isSignalAlive(4500);
             float rssi = Tracker.getFilteredRSSI();
 

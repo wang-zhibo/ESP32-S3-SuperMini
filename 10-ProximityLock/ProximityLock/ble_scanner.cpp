@@ -548,9 +548,9 @@ void BLETracker::onCompanionConnected(uint16_t connId, const uint8_t* remoteBda)
     _hasBoundDevice = true;
 
     _lastSeenMs = millis();
-    _lastRawRssi = -55;
-    _filter.reset();
-    _filter.update(-55);
+    // 关键修正: 刚建立连接时绝不伪造 -55dBm (人可能还在十米外门口刚连上蓝牙)
+    // 而是立即发起一次底层真实 RSSI 读取，以物理实际信号为准
+    readConnectionRssi();
 
     Serial.printf("\n🎉 [BLE伴侣] 目标设备已成功直连! 句柄: %d, MAC: %s\n", connId, buf);
     Serial.println("   • 核心特性: 底层已建立长连接链路，走芯片逻辑句柄，绝无任何MAC漂移和黑屏断连！\n");

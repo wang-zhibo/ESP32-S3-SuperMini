@@ -41,6 +41,7 @@ private:
     uint32_t    _staConnectedMs;
     bool        _staWasConnected;
     uint32_t    _apNoClientStartMs;
+    uint32_t    _nextRetryMs;
 };
 
 extern WiFiManager WiFiMgr;

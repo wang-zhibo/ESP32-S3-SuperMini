@@ -12,7 +12,8 @@ WiFiManager::WiFiManager()
       _lastCheckMs(0),
       _staConnectedMs(0),
       _staWasConnected(false),
-      _apNoClientStartMs(0) {}
+      _apNoClientStartMs(0),
+      _nextRetryMs(0) {}
 
 void WiFiManager::begin() {
     _prefs.begin("prox_wifi", false);
@@ -81,8 +82,16 @@ void WiFiManager::loop() {
                 }
             } else if (now - _connectStartMs >= 15000) {
                 _connecting = false;
-                Serial.printf("\n⚠️ [WiFi] 连接路由器 [%s] 超时，请检查密码或信号. 可通过直连热点 http://192.168.4.1 重新配网.\n", _ssid.c_str());
+                _nextRetryMs = now + 180000; // 3 分钟退避休眠
+                WiFi.disconnect(false);      // 暂停底层不断全信道狂扫天线
+                Serial.printf("\n⚠️ [WiFi] 连接路由器 [%s] 超时. 已启用 3 分钟休眠退避，为 BLE 让出天线并防止发热.\n", _ssid.c_str());
             }
+        } else if (!isConnected() && _ssid.length() > 0 && _nextRetryMs > 0 && now >= _nextRetryMs) {
+            _nextRetryMs = 0;
+            _connecting = true;
+            _connectStartMs = now;
+            WiFi.begin(_ssid.c_str(), _pass.c_str());
+            Serial.printf("\n[WiFi] 退避休眠结束，重新尝试连接路由器 Wi-Fi: %s ...\n", _ssid.c_str());
         }
 
         // 状态巡检与 AP 自动关闭逻辑 (满足以下任一条件满 30 秒即彻底关闭 AP 射频以降低发热)
@@ -201,6 +210,7 @@ void WiFiManager::saveWiFiConfig(const String& ssid, const String& pass) {
     _prefs.putString("sta_pass", _pass);
 
     Serial.printf("[WiFi] 写入新 Wi-Fi 凭证: %s, 正在发起连接...\n", _ssid.c_str());
+    _nextRetryMs = 0; // 重置退避计时器
     WiFi.disconnect();
     WiFi.begin(_ssid.c_str(), _pass.c_str());
     _connecting = true;
@@ -212,6 +222,7 @@ void WiFiManager::resetWiFiConfig() {
     _prefs.remove("sta_pass");
     _ssid = "";
     _pass = "";
+    _nextRetryMs = 0;
     WiFi.disconnect();
     _connecting = false;
     enableAP();

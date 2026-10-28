@@ -9,6 +9,8 @@
 #include <BLEHIDDevice.h>
 #include <Preferences.h>
 #include <vector>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include "filter.h"
 #include "config.h"
 
@@ -127,7 +129,7 @@ private:
 
     // 缓存周边发现的活跃外设
     std::vector<DiscoveredDevice> _discoveredDevices;
-    portMUX_TYPE   _mux;
+    SemaphoreHandle_t _mutex;
 };
 
 extern BLETracker Tracker;

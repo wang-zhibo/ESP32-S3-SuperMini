@@ -177,6 +177,17 @@ void loop() {
             break;
 
         case STATE_PRESENT: {
+            // 关键优化 1: 如果后台正在执行开屏/打密码，绝对禁止检测离席
+            if (Locker.isUnlocking()) {
+                break;
+            }
+
+            // 关键优化 2: 回座解锁后的“在场保护冷静期 (Grace Period)”
+            // 刚坐下 8 秒内，人体遮挡或信标重连可能导致瞬态掉包或信号抖动，坚决不进入 LEAVING
+            if (now - g_stateEnterMs < 8000) {
+                break;
+            }
+
             bool signalAlive = Tracker.isSignalAlive(g_leaveTimeoutMs);
             float rssi = Tracker.getFilteredRSSI();
 
@@ -190,12 +201,20 @@ void loop() {
         }
 
         case STATE_LEAVING: {
+            // 关键互斥: 若后台正在开屏/打密码，立即打断离开状态，恢复在场
+            if (Locker.isUnlocking()) {
+                g_state = STATE_PRESENT;
+                g_stateEnterMs = now;
+                break;
+            }
+
             bool signalAlive = Tracker.isSignalAlive(4000);
             float rssi = Tracker.getFilteredRSSI();
 
             // 如果在超时时间内信号恢复（带 3dBm 迟滞），返回在场状态
             if (signalAlive && rssi >= (float)(g_lockRSSI + 3)) {
                 g_state = STATE_PRESENT;
+                g_stateEnterMs = now;
                 Serial.println("[状态] 信号恢复，取消锁屏，保持在场.");
                 break;
             }

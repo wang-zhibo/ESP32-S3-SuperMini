@@ -113,8 +113,9 @@ BLETracker::BLETracker()
       _phonePairTimeoutMs(0),
       _hasIncomingPair(false),
       _incomingPairMs(0),
-      _mux(portMUX_INITIALIZER_UNLOCKED) {
+      _mutex(nullptr) {
     memset(_connectedBda, 0, sizeof(_connectedBda));
+    _mutex = xSemaphoreCreateMutex();
 }
 
 void BLETracker::begin() {
@@ -372,40 +373,41 @@ void BLETracker::onDeviceScanned(BLEAdvertisedDevice* device) {
     // 1. 维护周边设备扫描缓存 (Web UI 列表展示)
     // 严格限制：只收录约 1 米范围内的设备 (RSSI >= BLE_DISCOVERY_RSSI_THRESHOLD，即 -68dBm)
     if (rssi >= BLE_DISCOVERY_RSSI_THRESHOLD || isBoundTarget) {
-        portENTER_CRITICAL(&_mux);
-        bool found = false;
-        for (auto& item : _discoveredDevices) {
-            if (item.mac.equalsIgnoreCase(devMac)) {
-                item.rssi = rssi;
-                item.lastSeenMs = now;
-                if (devName.indexOf("外设") == -1 || item.name.length() == 0) {
-                    item.name = devName;
-                }
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            if (_discoveredDevices.size() >= 25) {
-                // 剔除超时时间最长的外设
-                uint32_t oldestTime = 0xFFFFFFFF;
-                size_t oldestIdx = 0;
-                for (size_t i = 0; i < _discoveredDevices.size(); ++i) {
-                    if (_discoveredDevices[i].lastSeenMs < oldestTime) {
-                        oldestTime = _discoveredDevices[i].lastSeenMs;
-                        oldestIdx = i;
+        if (_mutex && xSemaphoreTake(_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            bool found = false;
+            for (auto& item : _discoveredDevices) {
+                if (item.mac.equalsIgnoreCase(devMac)) {
+                    item.rssi = rssi;
+                    item.lastSeenMs = now;
+                    if (devName.indexOf("外设") == -1 || item.name.length() == 0) {
+                        item.name = devName;
                     }
+                    found = true;
+                    break;
                 }
-                _discoveredDevices.erase(_discoveredDevices.begin() + oldestIdx);
             }
-            DiscoveredDevice newDev;
-            newDev.mac = devMac;
-            newDev.name = devName;
-            newDev.rssi = rssi;
-            newDev.lastSeenMs = now;
-            _discoveredDevices.push_back(newDev);
+            if (!found) {
+                if (_discoveredDevices.size() >= 25) {
+                    // 剔除超时时间最长的外设
+                    uint32_t oldestTime = 0xFFFFFFFF;
+                    size_t oldestIdx = 0;
+                    for (size_t i = 0; i < _discoveredDevices.size(); ++i) {
+                        if (_discoveredDevices[i].lastSeenMs < oldestTime) {
+                            oldestTime = _discoveredDevices[i].lastSeenMs;
+                            oldestIdx = i;
+                        }
+                    }
+                    _discoveredDevices.erase(_discoveredDevices.begin() + oldestIdx);
+                }
+                DiscoveredDevice newDev;
+                newDev.mac = devMac;
+                newDev.name = devName;
+                newDev.rssi = rssi;
+                newDev.lastSeenMs = now;
+                _discoveredDevices.push_back(newDev);
+            }
+            xSemaphoreGive(_mutex);
         }
-        portEXIT_CRITICAL(&_mux);
     }
 
     // 2. 配对模式：寻找 RSSI 最强的设备 (贴在旁边的设备信号通常高于 -55dBm)
@@ -435,18 +437,19 @@ std::vector<DiscoveredDevice> BLETracker::getDiscoveredDevices() {
     uint32_t now = millis();
     std::vector<DiscoveredDevice> copy;
     copy.reserve(25);
-    portENTER_CRITICAL(&_mux);
-    // 只返回 1 米以内 (>= -68 dBm) 且在最近 20 秒内活跃的设备
-    for (auto it = _discoveredDevices.begin(); it != _discoveredDevices.end(); ) {
-        bool isBound = (_hasBoundDevice && it->mac.equalsIgnoreCase(_boundMAC));
-        if (!isBound && (it->rssi < BLE_DISCOVERY_RSSI_THRESHOLD || now - it->lastSeenMs > 20000)) {
-            it = _discoveredDevices.erase(it);
-        } else {
-            copy.push_back(*it);
-            ++it;
+    if (_mutex && xSemaphoreTake(_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        // 只返回 1 米以内 (>= -68 dBm) 且在最近 20 秒内活跃的设备
+        for (auto it = _discoveredDevices.begin(); it != _discoveredDevices.end(); ) {
+            bool isBound = (_hasBoundDevice && it->mac.equalsIgnoreCase(_boundMAC));
+            if (!isBound && (it->rssi < BLE_DISCOVERY_RSSI_THRESHOLD || now - it->lastSeenMs > 20000)) {
+                it = _discoveredDevices.erase(it);
+            } else {
+                copy.push_back(*it);
+                ++it;
+            }
         }
+        xSemaphoreGive(_mutex);
     }
-    portEXIT_CRITICAL(&_mux);
 
     // 按 RSSI 降序排序（越近排越前）
     std::sort(copy.begin(), copy.end(), [](const DiscoveredDevice& a, const DiscoveredDevice& b) {
@@ -456,9 +459,10 @@ std::vector<DiscoveredDevice> BLETracker::getDiscoveredDevices() {
 }
 
 void BLETracker::clearScanCache() {
-    portENTER_CRITICAL(&_mux);
-    _discoveredDevices.clear();
-    portEXIT_CRITICAL(&_mux);
+    if (_mutex && xSemaphoreTake(_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        _discoveredDevices.clear();
+        xSemaphoreGive(_mutex);
+    }
 }
 
 void BLETracker::pauseScan() {
@@ -544,12 +548,44 @@ void BLETracker::onCompanionConnected(uint16_t connId, const uint8_t* remoteBda)
     _hasBoundDevice = true;
 
     _lastSeenMs = millis();
-    _lastRawRssi = -55;
-    _filter.reset();
-    _filter.update(-55);
+    // 关键修正: 刚建立连接时绝不伪造 -55dBm (人可能还在十米外门口刚连上蓝牙)
+    // 而是立即发起一次底层真实 RSSI 读取，以物理实际信号为准
+    readConnectionRssi();
 
     Serial.printf("\n🎉 [BLE伴侣] 目标设备已成功直连! 句柄: %d, MAC: %s\n", connId, buf);
     Serial.println("   • 核心特性: 底层已建立长连接链路，走芯片逻辑句柄，绝无任何MAC漂移和黑屏断连！\n");
+
+    // 关键射频与温升优化：伴侣直连成功后，暂停后台主动广播扫描，释放 2.4GHz 射频资源
+    if (_pBLEScan) {
+        _pBLEScan->stop();
+        Serial.println("   • [射频优化] 伴侣直连已建立，暂停后台主动扫描，降低芯片发热与 2.4GHz 干扰。");
+    }
+
+#if defined(CONFIG_NIMBLE_ENABLED)
+    // 严格遵循 Apple Accessory Design Guidelines 协商连接链路参数
+    // 1) 间隔 15ms~30ms (12~24 * 1.25ms) 获得更高精度的快速 RSSI 采样
+    // 2) 潜伏 0
+    // 3) 监督超时 2000ms (200 * 10ms)，人走远后 2 秒立刻察觉物理断开，雷厉风行触发锁屏！
+    ble_gap_upd_params connParams;
+    memset(&connParams, 0, sizeof(connParams));
+    connParams.itvl_min = 12;
+    connParams.itvl_max = 24;
+    connParams.latency = 0;
+    connParams.supervision_timeout = 200;
+    connParams.min_ce_len = 0;
+    connParams.max_ce_len = 0;
+    ble_gap_update_params(connId, &connParams);
+    Serial.println("   • [链路优化] 已协商优化连接参数: 间隔 15~30ms, 离席断连感知从 20s 缩短至 2s.");
+#elif defined(CONFIG_BLUEDROID_ENABLED)
+    esp_ble_conn_update_params_t connParams;
+    memcpy(connParams.bda, remoteBda, ESP_BD_ADDR_LEN);
+    connParams.min_int = 12;
+    connParams.max_int = 24;
+    connParams.latency = 0;
+    connParams.timeout = 200;
+    esp_ble_gap_update_conn_params(&connParams);
+    Serial.println("   • [链路优化] 已协商优化连接参数: 间隔 15~30ms, 离席断连感知从 20s 缩短至 2s.");
+#endif
 
     // 立即发起一次真实链路 RSSI 测量
     readConnectionRssi();
@@ -559,6 +595,13 @@ void BLETracker::onCompanionDisconnected() {
     _isCompanionConnected = false;
     _lastSeenMs = 0;
     Serial.println("\n⚠️ [BLE伴侣] 伴侣设备已断开连接 (可能已离开工位). 正在重新开启广播等待回座秒连...");
+
+    // 关键射频与重连优化：伴侣断开后，重新唤醒后台扫描以备重连
+    if (_pBLEScan) {
+        _pBLEScan->clearResults();
+        _pBLEScan->start(0, nullptr, false);
+        Serial.println("   • [射频恢复] 伴侣已断开，重新唤醒后台扫描以备重新发现。");
+    }
 }
 
 void BLETracker::onConnectionRssiRead(int rssi) {
@@ -601,9 +644,9 @@ void BLETracker::loop() {
         }
     }
 
-    // 2. 关键优化：每 15 秒清空一次底层 BLEScan 堆积的扫描设备结果集
+    // 2. 关键优化：每 15 秒清空一次底层 BLEScan 堆积的扫描设备结果集 (仅当未连接伴侣且扫描活跃时)
     static uint32_t lastClearMs = 0;
-    if (_pBLEScan && (now - lastClearMs >= 15000)) {
+    if (_pBLEScan && !_isCompanionConnected && (now - lastClearMs >= 15000)) {
         lastClearMs = now;
         _pBLEScan->clearResults();
     }
