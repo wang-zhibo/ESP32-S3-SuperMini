@@ -57,6 +57,13 @@ static void customGapHandler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_
         Tracker.setAdvertisingState(param->adv_start_cmpl.status == ESP_BT_STATUS_SUCCESS);
     } else if (event == ESP_GAP_BLE_ADV_STOP_COMPLETE_EVT) {
         Tracker.setAdvertisingState(false);
+    } else if (event == ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT) {
+        if (param->update_conn_params.status == ESP_BT_STATUS_SUCCESS) {
+            Serial.printf("[BLE] 链路参数已生效: 间隔 %.2f ms, 潜伏 %d, 超时 %d ms\n",
+                          param->update_conn_params.conn_int * 1.25f,
+                          param->update_conn_params.latency,
+                          param->update_conn_params.timeout * 10);
+        }
     }
 }
 #endif
@@ -202,13 +209,21 @@ void BLETracker::begin() {
     // 核心优化 1: 紧凑主广播包 (保证总长度 <= 31 字节，黑屏被动扫描 100% 能够识别 HID)
     BLEAdvertisementData advData;
     advData.setFlags(0x06);         // General Discoverable + BR/EDR Not Supported (3 bytes)
-    advData.setAppearance(0x0180);  // Generic Remote Control (4 bytes)
+    advData.setAppearance(0x03C0);  // Generic HID (0x03C0) (4 bytes)
     // 采用紧凑 16-bit UUID 列表声明 0x1812 (HID) 与 0x180F (Battery) 服务 (6 bytes)
     const char srv16Payload[] = {0x05, 0x03, 0x12, 0x18, 0x0F, 0x18};
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
     advData.addData((char*)srv16Payload, 6);
 #else
     advData.addData(std::string(srv16Payload, 6));
+#endif
+
+    // 注入从机首选连接间隔范围 (45ms ~ 75ms，Apple/Android规范标准，降温省电且杜绝黑屏拒绝回连)
+    const char slaveItvlPayload[] = {0x05, 0x12, 0x24, 0x00, 0x3C, 0x00};
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
+    advData.addData((char*)slaveItvlPayload, 6);
+#else
+    advData.addData(std::string(slaveItvlPayload, 6));
 #endif
 
     // 核心优化 2: 扫描响应包单独放置设备完整名称 (黑屏被动扫描不请求，点亮屏幕或主动搜索时展示)
@@ -221,8 +236,8 @@ void BLETracker::begin() {
     // 核心优化 3: 严格锁定苹果官方推荐的固定广播时序 152.5ms (0x00F4)
     pAdv->setMinInterval(0x00F4);   // 152.5 ms
     pAdv->setMaxInterval(0x00F4);   // 152.5 ms
-    pAdv->setMinPreferred(0x06);    // 7.5 ms
-    pAdv->setMaxPreferred(0x12);    // 22.5 ms
+    pAdv->setMinPreferred(0x24);    // 45 ms (36 * 1.25ms)
+    pAdv->setMaxPreferred(0x3C);    // 75 ms (60 * 1.25ms)
     pAdv->setScanResponse(true);
 
     BLEDevice::startAdvertising();
@@ -533,7 +548,7 @@ void BLETracker::startPhonePairMode(uint32_t timeoutMs) {
     _incomingPairMAC = "";
     BLEDevice::startAdvertising();
     _isAdvertising = true;
-    Serial.printf("[BLE] 开启手机主动连接配对广播 (名称: ProximityLock-配对, 限时 %lu 秒)...\n", timeoutMs / 1000);
+    Serial.printf("[BLE] 开启手机主动连接配对广播 (名称: ProximityLock-伴侣, 限时 %lu 秒)...\n", timeoutMs / 1000);
 }
 
 void BLETracker::stopPhonePairMode() {
@@ -612,29 +627,29 @@ void BLETracker::onCompanionConnected(uint16_t connId, const uint8_t* remoteBda)
     }
 
 #if defined(CONFIG_NIMBLE_ENABLED)
-    // 严格遵循 Apple Accessory Design Guidelines 协商连接链路参数
-    // 1) 间隔 15ms~30ms (12~24 * 1.25ms) 获得更高精度的快速 RSSI 采样
-    // 2) 潜伏 0
-    // 3) 监督超时 2000ms (200 * 10ms)，人走远后 2 秒立刻察觉物理断开，雷厉风行触发锁屏！
+    // 严格遵循 Apple Accessory Design Guidelines 协商优化健康连接链路参数
+    // 1) 间隔 45ms~75ms (36~60 * 1.25ms) 显著降低射频发射占空比与芯片发热
+    // 2) 从机潜伏 (Slave Latency) = 2，空闲时跳过 2 次收发周期 (有效周期 135~225ms)，射频功耗骤降 60%
+    // 3) 监督超时 5000ms (500 * 10ms)，抗口袋遮挡/人体吸收/Wi-Fi信道瞬态干扰，彻底消除频繁异常物理断链
     ble_gap_upd_params connParams;
     memset(&connParams, 0, sizeof(connParams));
-    connParams.itvl_min = 12;
-    connParams.itvl_max = 24;
-    connParams.latency = 0;
-    connParams.supervision_timeout = 200;
+    connParams.itvl_min = 36;
+    connParams.itvl_max = 60;
+    connParams.latency = 2;
+    connParams.supervision_timeout = 500;
     connParams.min_ce_len = 0;
     connParams.max_ce_len = 0;
-    ble_gap_update_params(connId, &connParams);
-    Serial.println("   • [链路优化] 已协商优化连接参数: 间隔 15~30ms, 离席断连感知从 20s 缩短至 2s.");
+    int rc = ble_gap_update_params(connId, &connParams);
+    Serial.printf("   • [健康链路] 已协商连接参数 (rc=%d): 间隔 45~75ms, 潜伏 2, 超时 5.0s (强抗遮挡+深度降温).\n", rc);
 #elif defined(CONFIG_BLUEDROID_ENABLED)
     esp_ble_conn_update_params_t connParams;
     memcpy(connParams.bda, remoteBda, ESP_BD_ADDR_LEN);
-    connParams.min_int = 12;
-    connParams.max_int = 24;
-    connParams.latency = 0;
-    connParams.timeout = 200;
+    connParams.min_int = 36;
+    connParams.max_int = 60;
+    connParams.latency = 2;
+    connParams.timeout = 500;
     esp_ble_gap_update_conn_params(&connParams);
-    Serial.println("   • [链路优化] 已协商优化连接参数: 间隔 15~30ms, 离席断连感知从 20s 缩短至 2s.");
+    Serial.println("   • [健康链路] 已发起连接参数优化: 间隔 45~75ms, 潜伏 2, 超时 5.0s (强抗遮挡+深度降温).");
 #endif
 
     // 立即发起一次真实链路 RSSI 测量

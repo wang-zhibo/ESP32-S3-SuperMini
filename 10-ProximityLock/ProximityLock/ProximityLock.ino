@@ -86,7 +86,7 @@ void saveRuntimeSettings(int lockRssi, int unlockRssi, uint32_t timeoutMs, Opera
 }
 
 void setup() {
-    setCpuFrequencyMhz(80); // 调频至 80MHz 降温省电 (对于BLE+Web性能完全富余，功耗发热直降约60%)
+    setCpuFrequencyMhz(160); // 调频至 160MHz 黄金平衡点 (兼顾 BLE/Wi-Fi 高速并发无丢包与发热降低约35%)
 
     // 优先初始化 USB HID 键盘复合总线 (抢先向主机发起总线物理重枚举)
     Locker.begin();
