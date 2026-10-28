@@ -13,9 +13,16 @@ void HIDLocker::begin() {
 #if ARDUINO_USB_MODE == 0
     Serial.println("✅ [HID] TinyUSB 物理键盘总线初始化...");
     Keyboard.begin();
+    Keyboard.releaseAll(); // 启动时强制释放全部按键，防暖重启卡键
     USB.begin();
 #else
     Serial.println("⚠️ [HID] 警告: 当前编译选项未启用 TinyUSB (ARDUINO_USB_MODE != 0)。若需物理锁屏按键，请在 IDE 菜单将 USB Mode 选为 'USB-OTG (TinyUSB)'。");
+#endif
+}
+
+void HIDLocker::releaseAll() {
+#if ARDUINO_USB_MODE == 0
+    Keyboard.releaseAll();
 #endif
 }
 
@@ -29,6 +36,7 @@ bool HIDLocker::isTinyUSBEnabled() const {
 
 void HIDLocker::lock(OperatingSystem os) {
 #if ARDUINO_USB_MODE == 0
+    Keyboard.releaseAll(); // 操作前先清零按键状态
     switch (os) {
         case OS_WINDOWS:
             // Windows: Win + L
@@ -84,6 +92,7 @@ void HIDLocker::typePassword(const String& password) {
 
 void HIDLocker::unlock(OperatingSystem os, const String& password) {
 #if ARDUINO_USB_MODE == 0
+    Keyboard.releaseAll(); // 解锁前先确保按键状态清零
     if (password.length() == 0) {
         // 无密码模式：
         // 1. 发送无害 Left Shift 唤醒显示器
@@ -125,6 +134,7 @@ void HIDLocker::unlock(OperatingSystem os, const String& password) {
         delay(50);
         Keyboard.releaseAll();
     }
+    Keyboard.releaseAll(); // 解锁结束双重保底
 #endif
 }
 

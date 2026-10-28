@@ -65,7 +65,9 @@ void WebService::registerRoutes() {
         const char* osNames[] = {"Windows (Win+L)", "macOS (Cmd+Ctrl+Q)", "Linux (Ctrl+Alt+L)"};
         const char* stateNames[] = {"未绑定", "贴近配对中", "在场安全监护", "离开预警", "远离已锁屏", "临时暂停免打扰"};
 
-        String json = "{";
+        String json;
+        json.reserve(1024); // 内存性能优化：单次预分配，杜绝 1 秒一次的频繁 realloc 堆碎片
+        json = "{";
         json += "\"state\":" + String((int)g_state) + ",";
         json += "\"state_str\":\"" + String(stateNames[g_state]) + "\",";
         json += "\"os_mode\":" + String((int)g_osMode) + ",";
@@ -118,7 +120,9 @@ void WebService::registerRoutes() {
         String boundMac = Tracker.getBoundMAC();
         uint32_t now = millis();
 
-        String json = "[";
+        String json;
+        json.reserve(list.size() * 128 + 32);
+        json = "[";
         for (size_t i = 0; i < list.size(); ++i) {
             if (i > 0) json += ",";
             bool isBound = (boundMac.length() > 0 && list[i].mac.equalsIgnoreCase(boundMac));

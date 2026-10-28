@@ -7,8 +7,8 @@
  */
 class RSSIFilter {
 public:
-    explicit RSSIFilter(float alpha = 0.25f)
-        : _alpha(alpha), _filteredRssi(0.0f), _initialized(false) {}
+    explicit RSSIFilter(float alphaRise = 0.45f, float alphaFall = 0.22f)
+        : _alphaRise(alphaRise), _alphaFall(alphaFall), _filteredRssi(0.0f), _initialized(false) {}
 
     void reset() {
         _initialized = false;
@@ -27,7 +27,11 @@ public:
         if (delta > 18.0f) delta = 18.0f;
         if (delta < -18.0f) delta = -18.0f;
 
-        _filteredRssi += _alpha * delta;
+        // 关键架构优化：非对称双速率滤波
+        // 靠近电脑（delta > 0）：采用较敏捷的 alphaRise (0.45)，人一走近即刻响应秒解锁
+        // 离开电脑（delta <= 0）：采用稳健平滑的 alphaFall (0.22)，抗人体遮挡杜绝误锁屏
+        float alpha = (delta > 0.0f) ? _alphaRise : _alphaFall;
+        _filteredRssi += alpha * delta;
         return _filteredRssi;
     }
 
@@ -39,14 +43,14 @@ public:
         return _initialized;
     }
 
-    void setAlpha(float alpha) {
-        if (alpha > 0.01f && alpha <= 1.0f) {
-            _alpha = alpha;
-        }
+    void setAlphas(float alphaRise, float alphaFall) {
+        if (alphaRise > 0.01f && alphaRise <= 1.0f) _alphaRise = alphaRise;
+        if (alphaFall > 0.01f && alphaFall <= 1.0f) _alphaFall = alphaFall;
     }
 
 private:
-    float _alpha;
+    float _alphaRise;
+    float _alphaFall;
     float _filteredRssi;
     bool  _initialized;
 };

@@ -24,6 +24,9 @@ public:
 
     // 检查当前固件是否成功启用了 TinyUSB 键盘驱动 (ARDUINO_USB_MODE == 0)
     bool isTinyUSBEnabled() const;
+
+    // 强制释放所有物理按键状态 (防卡键保底)
+    void releaseAll();
 };
 
 extern HIDLocker Locker;
