@@ -454,7 +454,7 @@
           </div>
         </div>
 
-        <div class="info-grid" style="grid-template-columns: 1fr 1fr 1fr;">
+        <div class="info-grid" style="grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));">
           <div class="info-box">
             <div class="info-label">绑定目标设备</div>
             <div class="info-value" id="dashBoundName">未绑定</div>
@@ -466,8 +466,13 @@
             <div style="font-size:10px; color:var(--text-sub);" id="dashUptime">运行时间: 0分</div>
           </div>
           <div class="info-box">
-            <div class="info-label">固件版本号</div>
-            <div class="info-value" id="dashFirmwareVer" style="color:var(--accent-blue);">v2.1.0</div>
+            <div class="info-label">主控运行温度</div>
+            <div class="info-value" id="dashCpuTemp" style="color:var(--accent-green);">-- °C</div>
+            <div style="font-size:10px; color:var(--text-sub);" id="dashTempStatus">温升状态: 正常 🌿</div>
+          </div>
+          <div class="info-box">
+            <div class="info-label">固件与内存</div>
+            <div class="info-value" id="dashFirmwareVer" style="color:var(--accent-blue);">v2.5.1</div>
             <div style="font-size:10px; color:var(--text-sub);" id="dashFreeHeap">可用内存: -- KB</div>
           </div>
         </div>
@@ -879,6 +884,26 @@
       if (data.free_heap_kb) {
         const heapEl = document.getElementById('dashFreeHeap');
         if (heapEl) heapEl.innerText = '可用内存: ' + data.free_heap_kb + ' KB';
+      }
+
+      // 主控温度动态更新与变色预警
+      if (data.cpu_temp !== undefined) {
+        const temp = parseFloat(data.cpu_temp);
+        const tempEl = document.getElementById('dashCpuTemp');
+        const statusEl = document.getElementById('dashTempStatus');
+        if (tempEl) {
+          tempEl.innerText = temp.toFixed(1) + ' °C';
+          if (temp < 50) {
+            tempEl.style.color = 'var(--accent-green)';
+            if (statusEl) statusEl.innerText = '温升状态: 微温正常 🌿';
+          } else if (temp < 65) {
+            tempEl.style.color = '#f59e0b';
+            if (statusEl) statusEl.innerText = '温升状态: 稍温运转 ⚡';
+          } else {
+            tempEl.style.color = 'var(--accent-red)';
+            if (statusEl) statusEl.innerText = '温升状态: 偏热注意 🔥';
+          }
+        }
       }
 
       // 实时同步仪表盘上的锁屏/唤醒标尺指针

@@ -84,6 +84,7 @@ void WebService::registerRoutes() {
         json += "\"pause_remain_sec\":" + String(pauseRemainSec) + ",";
         json += "\"uptime_sec\":" + String(now / 1000) + ",";
         json += "\"firmware_version\":\"" + String(FIRMWARE_VERSION) + "\",";
+        json += "\"cpu_temp\":" + String(temperatureRead(), 1) + ",";
         json += "\"free_heap_kb\":" + String(ESP.getFreeHeap() / 1024) + ",";
         json += "\"has_unlock_pwd\":" + String(g_unlockPassword.length() > 0 ? "true" : "false") + ",";
         json += "\"auto_unlock\":" + String(g_autoUnlockEnabled ? "true" : "false") + ",";
@@ -112,6 +113,20 @@ void WebService::registerRoutes() {
 
         _server.send(200, "application/json", json);
     });
+
+    // 3.1 主控芯片实时温度独立接口
+    auto handleTemp = [this]() {
+        sendJsonHeaders(_server);
+        float temp = temperatureRead();
+        String json;
+        json.reserve(64);
+        json = "{\"ok\":true,\"temperature\":";
+        json += String(temp, 1);
+        json += ",\"unit\":\"°C\"}";
+        _server.send(200, "application/json", json);
+    };
+    _server.on("/api/temperature", HTTP_GET, handleTemp);
+    _server.on("/api/temp", HTTP_GET, handleTemp);
 
     // 4. 周边扫描到的 BLE 设备列表
     _server.on("/api/ble/devices", HTTP_GET, [this]() {
