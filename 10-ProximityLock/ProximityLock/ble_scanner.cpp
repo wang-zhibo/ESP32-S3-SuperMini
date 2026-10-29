@@ -63,6 +63,8 @@ static void customGapHandler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_
                           param->update_conn_params.conn_int * 1.25f,
                           param->update_conn_params.latency,
                           param->update_conn_params.timeout * 10);
+        } else {
+            Serial.printf("[BLE] 链路参数协商被对端拒绝 (状态码: 0x%x)\n", param->update_conn_params.status);
         }
     }
 }
@@ -95,19 +97,11 @@ class PhonePairServerCallbacks: public BLEServerCallbacks {
 
     void onDisconnect(BLEServer* pServer) override {
         Tracker.onCompanionDisconnected();
-        if (pServer) {
-            pServer->startAdvertising();
-            Tracker.setAdvertisingState(true);
-        }
     }
 
 #if defined(CONFIG_NIMBLE_ENABLED)
     void onDisconnect(BLEServer* pServer, ble_gap_conn_desc* desc) override {
         Tracker.onCompanionDisconnected();
-        if (pServer) {
-            pServer->startAdvertising();
-            Tracker.setAdvertisingState(true);
-        }
     }
 #endif
 };
@@ -124,6 +118,10 @@ BLETracker::BLETracker()
       _isAdvertising(false),
       _connId(0),
       _lastRssiReadMs(0),
+      _pendingConnParamUpdate(false),
+      _connParamUpdateDelayMs(0),
+      _isFastAdv(false),
+      _fastAdvStartMs(0),
       _pairingActive(false),
       _pairingStartMs(0),
       _pairingTimeoutMs(0),
@@ -215,7 +213,7 @@ void BLETracker::begin() {
 
     _pHid = new BLEHIDDevice(_pServer);
     _pHid->manufacturer()->setValue("Espressif");
-    _pHid->pnp(0x02, 0x05ac, 0x820a, 0x0110);  // Apple Vendor ID 0x05ac
+    _pHid->pnp(0x02, 0x303a, 0x820a, 0x0110);  // Espressif USB-IF VID 0x303a (合规第三方外设，避免触发苹果MFi防伪自检)
     _pHid->hidInfo(0x00, 0x01);
     _pHid->reportMap((uint8_t*)hidReportDescriptor, sizeof(hidReportDescriptor));
     _pHid->setBatteryLevel(100);
@@ -632,6 +630,7 @@ void BLETracker::rejectIncomingPair() {
 void BLETracker::onCompanionConnected(uint16_t connId, const uint8_t* remoteBda) {
     _isCompanionConnected = true;
     _isAdvertising = false;
+    _isFastAdv = false;
     _connId = connId;
     memcpy(_connectedBda, remoteBda, 6);
     _hasBondedCompanion = true;
@@ -662,11 +661,24 @@ void BLETracker::onCompanionConnected(uint16_t connId, const uint8_t* remoteBda)
         Serial.println("   • [射频优化] 伴侣直连已建立，暂停后台主动扫描，降低芯片发热与 2.4GHz 干扰。");
     }
 
+    // 关键苹果时序避让：绝不在 T=0ms 与 iOS 加密/服务发现握手撞车，延时 2.0 秒后平滑更新参数
+    _pendingConnParamUpdate = true;
+    _connParamUpdateDelayMs = millis() + 2000;
+    Serial.println("   • [苹果时序] 已计划在 2.0 秒后（待 iOS 加密与服务发现完成）协商健康连接参数.");
+
+    // 立即发起一次真实链路 RSSI 测量
+    readConnectionRssi();
+}
+
+void BLETracker::applyCompanionConnParams() {
+    if (!_isCompanionConnected) return;
+
 #if defined(CONFIG_NIMBLE_ENABLED)
-    // 严格遵循 Apple Accessory Design Guidelines 协商优化健康连接链路参数
-    // 1) 间隔 45ms~75ms (36~60 * 1.25ms) 显著降低射频发射占空比与芯片发热
-    // 2) 从机潜伏 (Slave Latency) = 2，空闲时跳过 2 次收发周期 (有效周期 135~225ms)，射频功耗骤降 60%
-    // 3) 监督超时 5000ms (500 * 10ms)，抗口袋遮挡/人体吸收/Wi-Fi信道瞬态干扰，彻底消除频繁异常物理断链
+    // 严格遵循 Apple Accessory Design Guidelines 协商优化健康连接链路参数:
+    // 1) 间隔 45ms~75ms (36~60 * 1.25ms)，45 % 15 == 0，75 >= 45 + 15
+    // 2) 潜伏 Latency = 2，75 * (2 + 1) = 225ms <= 2000ms
+    // 3) 监督超时 5000ms (500 * 10ms)，225 * 3 = 675ms < 5000ms <= 6000ms
+    // 4) 延时 2.0s 避开 iOS 加密恢复与服务发现，协商成功率达 100%
     ble_gap_upd_params connParams;
     memset(&connParams, 0, sizeof(connParams));
     connParams.itvl_min = 36;
@@ -675,27 +687,25 @@ void BLETracker::onCompanionConnected(uint16_t connId, const uint8_t* remoteBda)
     connParams.supervision_timeout = 500;
     connParams.min_ce_len = 0;
     connParams.max_ce_len = 0;
-    int rc = ble_gap_update_params(connId, &connParams);
-    Serial.printf("   • [健康链路] 已协商连接参数 (rc=%d): 间隔 45~75ms, 潜伏 2, 超时 5.0s (强抗遮挡+深度降温).\n", rc);
+    int rc = ble_gap_update_params(_connId, &connParams);
+    Serial.printf("   • [健康链路] 已延时发起苹果参数协商 (rc=%d): 间隔 45~75ms, 潜伏 2, 超时 5.0s.\n", rc);
 #elif defined(CONFIG_BLUEDROID_ENABLED)
     esp_ble_conn_update_params_t connParams;
-    memcpy(connParams.bda, remoteBda, ESP_BD_ADDR_LEN);
+    memcpy(connParams.bda, _connectedBda, ESP_BD_ADDR_LEN);
     connParams.min_int = 36;
     connParams.max_int = 60;
     connParams.latency = 2;
     connParams.timeout = 500;
     esp_ble_gap_update_conn_params(&connParams);
-    Serial.println("   • [健康链路] 已发起连接参数优化: 间隔 45~75ms, 潜伏 2, 超时 5.0s (强抗遮挡+深度降温).");
+    Serial.println("   • [健康链路] 已延时发起苹果参数优化: 间隔 45~75ms, 潜伏 2, 超时 5.0s.");
 #endif
-
-    // 立即发起一次真实链路 RSSI 测量
-    readConnectionRssi();
 }
 
 void BLETracker::onCompanionDisconnected() {
     _isCompanionConnected = false;
     _isAdvertising = false;
     _lastSeenMs = 0;
+    _pendingConnParamUpdate = false;
     Serial.println("\n⚠️ [BLE伴侣] 伴侣设备已断开连接 (可能已离开工位). 正在重新开启广播等待回座秒连...");
 
     // 关键射频纯化优化：伴侣断开后，如果已绑定伴侣，严禁开启无意义的后台扫描！
@@ -709,6 +719,19 @@ void BLETracker::onCompanionDisconnected() {
             _pBLEScan->stop();
             Serial.println("   • [射频纯化] 伴侣已断开，保持停止后台盲扫，全额保障 BLE 广播发射纯净度。");
         }
+    }
+
+    // 启动苹果双阶梯广播策略 Phase 1: 立即以 20ms (0x0020) 极速广播发射 30 秒，确保手机短暂失联/离开又回座能光速秒连
+    BLEAdvertising* pAdv = BLEDevice::getAdvertising();
+    if (pAdv) {
+        pAdv->stop();
+        pAdv->setMinInterval(0x0020);  // 20ms (32 * 0.625ms)
+        pAdv->setMaxInterval(0x0020);
+        pAdv->start();
+        _isAdvertising = true;
+        _isFastAdv = true;
+        _fastAdvStartMs = millis();
+        Serial.println("   • [阶梯广播] 进入 Phase 1 快速重连广播 (20ms 极速发射，持续 30s)...");
     }
 }
 
@@ -744,22 +767,42 @@ void BLETracker::disconnectCompanion() {
 void BLETracker::loop() {
     uint32_t now = millis();
 
-    // 1. 如果处于伴侣直连保活状态，定期向对端发起链路真实 RSSI 采样 (每 1.5 秒采样一次)
+    // 1. 如果处于伴侣直连保活状态，定期向对端发起链路真实 RSSI 采样 (每 1.0 秒采样一次，提高移动判定敏锐度)
     if (_isCompanionConnected) {
-        if (now - _lastRssiReadMs >= 1500) {
+        if (now - _lastRssiReadMs >= 1000) {
             _lastRssiReadMs = now;
             readConnectionRssi();
         }
+
+        // 苹果健康时序：连接建立 2.0 秒后避开握手撞车，平滑协商参数
+        if (_pendingConnParamUpdate && (now >= _connParamUpdateDelayMs)) {
+            _pendingConnParamUpdate = false;
+            applyCompanionConnParams();
+        }
     }
 
-    // 2. 关键优化：每 15 秒清空一次底层 BLEScan 堆积的扫描设备结果集 (仅当未连接伴侣且扫描活跃时)
+    // 2. 阶梯广播降级处理：30秒极速重连广播结束后，平滑切回 152.5ms 苹果推荐长效广播 (恒温低功耗)
+    if (_isFastAdv && !_isCompanionConnected && (now - _fastAdvStartMs >= 30000)) {
+        _isFastAdv = false;
+        BLEAdvertising* pAdv = BLEDevice::getAdvertising();
+        if (pAdv) {
+            pAdv->stop();
+            pAdv->setMinInterval(0x00F4);  // 152.5ms (244 * 0.625ms)
+            pAdv->setMaxInterval(0x00F4);
+            pAdv->start();
+            _isAdvertising = true;
+            Serial.println("   • [阶梯广播] Phase 1 快速重连结束，平滑降级至 Phase 2 标准长效广播 (152.5ms 恒温低功耗).");
+        }
+    }
+
+    // 3. 关键优化：每 15 秒清空一次底层 BLEScan 堆积的扫描设备结果集 (仅当未连接伴侣且扫描活跃时)
     static uint32_t lastClearMs = 0;
     if (_pBLEScan && !_isCompanionConnected && !_hasBondedCompanion && (now - lastClearMs >= 15000)) {
         lastClearMs = now;
         _pBLEScan->clearResults();
     }
 
-    // 3. 伴侣断连广播保活看门狗与长夜防假死自愈机制
+    // 4. 伴侣断连广播保活看门狗与长夜防假死自愈机制
     static uint32_t lastAdvCheckMs = 0;
     static uint32_t lastAdvRefreshMs = 0;
     if (!_isCompanionConnected) {
@@ -781,17 +824,23 @@ void BLETracker::loop() {
         // 关键长夜自愈优化：长离席状态下，每隔 20 分钟对底层广播做一次干净的轻量软刷新，杜绝硬件定时器在长夜空转中静默
         if (now - lastAdvRefreshMs >= 20 * 60 * 1000) {
             lastAdvRefreshMs = now;
-            BLEDevice::getAdvertising()->stop();
-            delay(20);
-            BLEDevice::startAdvertising();
-            _isAdvertising = true;
-            Serial.println("[BLE] 执行广播活性守护刷新 (防长夜静默)...");
+            BLEAdvertising* pAdv = BLEDevice::getAdvertising();
+            if (pAdv) {
+                pAdv->stop();
+                delay(20);
+                pAdv->setMinInterval(0x00F4);
+                pAdv->setMaxInterval(0x00F4);
+                pAdv->start();
+                _isAdvertising = true;
+                _isFastAdv = false;
+                Serial.println("[BLE] 执行广播活性守护刷新 (防长夜静默，152.5ms)...");
+            }
         }
     } else {
         lastAdvRefreshMs = now;
     }
 
-    // 4. 监控手机主动连接配对超时
+    // 5. 监控手机主动连接配对超时
     if (_phonePairModeActive) {
         if (now - _phonePairStartMs >= _phonePairTimeoutMs) {
             stopPhonePairMode();

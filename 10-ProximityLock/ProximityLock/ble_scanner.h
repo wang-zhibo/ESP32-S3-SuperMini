@@ -114,6 +114,13 @@ private:
     uint8_t        _connectedBda[6];
     uint32_t       _lastRssiReadMs;
 
+    // 苹果健康连接时序状态
+    bool           _pendingConnParamUpdate;
+    uint32_t       _connParamUpdateDelayMs;
+    bool           _isFastAdv;
+    uint32_t       _fastAdvStartMs;
+    void           applyCompanionConnParams();
+
     // 贴近配对模式临时状态
     bool           _pairingActive;
     uint32_t       _pairingStartMs;
