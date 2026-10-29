@@ -157,16 +157,48 @@ void BLETracker::begin() {
     _pServer->advertiseOnDisconnect(true);
 #endif
 
-    // 标准 HID 报告描述符 (Consumer Control / 媒体自拍遥控器类型)
-    // 核心优势: 
-    // 1) 允许 iPhone/iPad/Mac 原生系统【设置 -> 蓝牙】直接搜到并配对连接
-    // 2) 具备 iOS 最高自动重连优先级 (iOS 后台 daemon 自动拉起已配对的遥控设备)
-    // 3) 不含文本键位 (Usage Page 0x0C)，绝对不会影响 iPhone 屏幕虚拟软键盘打字
+    // 标准 HID 复合报告描述符 (Mouse/Pointer 指针 + Consumer Control 媒体键)
+    // 核心架构优势: 
+    // 1) 声明 Mouse (0x01, 0x02) 指针外设: 获得 iOS / Android 系统级最高后台静默自动回连特权
+    //    (直接进入系统内核 Auto-Connect 白名单队列，绝不被判定为低优先级玩具)
+    // 2) 绝不影响软键盘: 指针类设备在 iOS 和 Android 上连接时，手机打字虚拟软键盘 100% 正常弹出！
+    // 3) 零操作干扰: ESP32 仅维持物理链路与读取连接 RSSI，绝不发送鼠标移动/点击报文，对手机 0 干扰
+    // 4) 包含 Consumer Control (0x0C, 0x01): 保留音量/多媒体扩展能力
     static const uint8_t hidReportDescriptor[] = {
+        // --- Report ID 1: Mouse / Pointer ---
+        0x05, 0x01,        // Usage Page (Generic Desktop)
+        0x09, 0x02,        // Usage (Mouse)
+        0xA1, 0x01,        // Collection (Application)
+        0x85, 0x01,        //   Report ID (1)
+        0x09, 0x01,        //   Usage (Pointer)
+        0xA1, 0x00,        //   Collection (Physical)
+        0x05, 0x09,        //     Usage Page (Buttons)
+        0x19, 0x01,        //     Usage Minimum (1)
+        0x29, 0x03,        //     Usage Maximum (3)
+        0x15, 0x00,        //     Logical Minimum (0)
+        0x25, 0x01,        //     Logical Maximum (1)
+        0x95, 0x03,        //     Report Count (3)
+        0x75, 0x01,        //     Report Size (1)
+        0x81, 0x02,        //     Input (Data, Variable, Absolute)
+        0x95, 0x01,        //     Report Count (1)
+        0x75, 0x05,        //     Report Size (5) - padding
+        0x81, 0x01,        //     Input (Constant)
+        0x05, 0x01,        //     Usage Page (Generic Desktop)
+        0x09, 0x30,        //     Usage (X)
+        0x09, 0x31,        //     Usage (Y)
+        0x15, 0x81,        //     Logical Minimum (-127)
+        0x25, 0x7F,        //     Logical Maximum (127)
+        0x75, 0x08,        //     Report Size (8)
+        0x95, 0x02,        //     Report Count (2)
+        0x81, 0x06,        //     Input (Data, Variable, Relative)
+        0xC0,              //   End Collection (Physical)
+        0xC0,              // End Collection (Application)
+
+        // --- Report ID 2: Consumer Control ---
         0x05, 0x0C,        // Usage Page (Consumer Devices)
         0x09, 0x01,        // Usage (Consumer Control)
         0xA1, 0x01,        // Collection (Application)
-        0x85, 0x01,        //   Report ID (1)
+        0x85, 0x02,        //   Report ID (2)
         0x09, 0xE9,        //   Usage (Volume Up / Shutter)
         0x09, 0xEA,        //   Usage (Volume Down)
         0x09, 0xCD,        //   Usage (Play/Pause)
@@ -176,7 +208,7 @@ void BLETracker::begin() {
         0x95, 0x03,        //   Report Count (3)
         0x81, 0x02,        //   Input (Data, Variable, Absolute)
         0x75, 0x01,        //   Report Size (1)
-        0x95, 0x05,        //   Report Count (5) - padding to 1 byte
+        0x95, 0x05,        //   Report Count (5) - padding
         0x81, 0x01,        //   Input (Constant)
         0xC0               // End Collection
     };
@@ -209,7 +241,7 @@ void BLETracker::begin() {
     // 核心优化 1: 紧凑主广播包 (保证总长度 <= 31 字节，黑屏被动扫描 100% 能够识别 HID)
     BLEAdvertisementData advData;
     advData.setFlags(0x06);         // General Discoverable + BR/EDR Not Supported (3 bytes)
-    advData.setAppearance(0x03C0);  // Generic HID (0x03C0) (4 bytes)
+    advData.setAppearance(0x03C2);  // BLE HID Mouse 指针设备 (0x03C2: 获得系统级最高后台自动回连特权且不吞软键盘)
     // 采用紧凑 16-bit UUID 列表声明 0x1812 (HID) 与 0x180F (Battery) 服务 (6 bytes)
     const char srv16Payload[] = {0x05, 0x03, 0x12, 0x18, 0x0F, 0x18};
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
@@ -243,13 +275,17 @@ void BLETracker::begin() {
     BLEDevice::startAdvertising();
     _isAdvertising = true;
 
-    // 2. 初始化被动扫描 (兼顾周边信标与老式固定 MAC 设备)
+    // 2. 初始化被动扫描 (仅当未绑定伴侣时，才启动周边信标与老式固定 MAC 设备扫描)
     _pBLEScan = BLEDevice::getScan();
     _pBLEScan->setAdvertisedDeviceCallbacks(new AdvertisedDeviceCallbacks(), true);
     _pBLEScan->setActiveScan(false);
     _pBLEScan->setInterval(BLE_SCAN_INTERVAL_MS);
     _pBLEScan->setWindow(BLE_SCAN_WINDOW_MS);
-    _pBLEScan->start(0, nullptr, false);
+    if (!_hasBondedCompanion) {
+        _pBLEScan->start(0, nullptr, false);
+    } else {
+        Serial.println("   • [射频纯化] 已绑定手机伴侣，抑制后台盲扫，全额释放 2.4GHz 射频资源供广播直连。");
+    }
 
     Serial.printf("[BLE] 伴侣直连服务已就绪. 广播名称: ProximityLock-伴侣\n");
     Serial.printf("   • 绑定状态: %s (%s, %s)\n", 
@@ -662,11 +698,17 @@ void BLETracker::onCompanionDisconnected() {
     _lastSeenMs = 0;
     Serial.println("\n⚠️ [BLE伴侣] 伴侣设备已断开连接 (可能已离开工位). 正在重新开启广播等待回座秒连...");
 
-    // 关键射频与重连优化：伴侣断开后，重新唤醒后台扫描以备重连
+    // 关键射频纯化优化：伴侣断开后，如果已绑定伴侣，严禁开启无意义的后台扫描！
+    // 将 100% 射频硬件与 CPU 时钟全额交给 BLE 广播发射，杜绝天线争抢与时序抖动
     if (_pBLEScan) {
-        _pBLEScan->clearResults();
-        _pBLEScan->start(0, nullptr, false);
-        Serial.println("   • [射频恢复] 伴侣已断开，重新唤醒后台扫描以备重新发现。");
+        if (!_hasBondedCompanion) {
+            _pBLEScan->clearResults();
+            _pBLEScan->start(0, nullptr, false);
+            Serial.println("   • [射频恢复] 伴侣已断开，重新唤醒后台扫描以备重新发现。");
+        } else {
+            _pBLEScan->stop();
+            Serial.println("   • [射频纯化] 伴侣已断开，保持停止后台盲扫，全额保障 BLE 广播发射纯净度。");
+        }
     }
 }
 
@@ -712,26 +754,41 @@ void BLETracker::loop() {
 
     // 2. 关键优化：每 15 秒清空一次底层 BLEScan 堆积的扫描设备结果集 (仅当未连接伴侣且扫描活跃时)
     static uint32_t lastClearMs = 0;
-    if (_pBLEScan && !_isCompanionConnected && (now - lastClearMs >= 15000)) {
+    if (_pBLEScan && !_isCompanionConnected && !_hasBondedCompanion && (now - lastClearMs >= 15000)) {
         lastClearMs = now;
         _pBLEScan->clearResults();
     }
 
-    // 3. 伴侣断连广播保活看门狗：仅当广播真正离线时才自愈重新拉起，彻底杜绝每2秒暴力轮询颠簸
+    // 3. 伴侣断连广播保活看门狗与长夜防假死自愈机制
     static uint32_t lastAdvCheckMs = 0;
-    if (!_isCompanionConnected && (now - lastAdvCheckMs >= 3000)) {
-        lastAdvCheckMs = now;
+    static uint32_t lastAdvRefreshMs = 0;
+    if (!_isCompanionConnected) {
+        if (now - lastAdvCheckMs >= 3000) {
+            lastAdvCheckMs = now;
 #if defined(CONFIG_NIMBLE_ENABLED)
-        if (!ble_gap_adv_active()) {
-            BLEDevice::startAdvertising();
-            _isAdvertising = true;
-        }
+            if (!ble_gap_adv_active()) {
+                BLEDevice::startAdvertising();
+                _isAdvertising = true;
+            }
 #elif defined(CONFIG_BLUEDROID_ENABLED)
-        if (!_isAdvertising) {
+            if (!_isAdvertising) {
+                BLEDevice::startAdvertising();
+                _isAdvertising = true;
+            }
+#endif
+        }
+
+        // 关键长夜自愈优化：长离席状态下，每隔 20 分钟对底层广播做一次干净的轻量软刷新，杜绝硬件定时器在长夜空转中静默
+        if (now - lastAdvRefreshMs >= 20 * 60 * 1000) {
+            lastAdvRefreshMs = now;
+            BLEDevice::getAdvertising()->stop();
+            delay(20);
             BLEDevice::startAdvertising();
             _isAdvertising = true;
+            Serial.println("[BLE] 执行广播活性守护刷新 (防长夜静默)...");
         }
-#endif
+    } else {
+        lastAdvRefreshMs = now;
     }
 
     // 4. 监控手机主动连接配对超时
