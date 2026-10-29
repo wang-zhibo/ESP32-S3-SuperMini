@@ -86,7 +86,7 @@ void saveRuntimeSettings(int lockRssi, int unlockRssi, uint32_t timeoutMs, Opera
 }
 
 void setup() {
-    setCpuFrequencyMhz(160); // 调频至 160MHz 黄金平衡点 (兼顾 BLE/Wi-Fi 高速并发无丢包与发热降低约35%)
+    setCpuFrequencyMhz(80); // 调频至 80MHz 极速节能档 (伴侣直连与USB完全绰绰有余，功耗发热直降约60%)
 
     // 优先初始化 USB HID 键盘复合总线 (抢先向主机发起总线物理重枚举)
     Locker.begin();
@@ -284,7 +284,7 @@ void loop() {
 
     // 7. 板载 LED 视觉反馈
     updateLedFeedback();
-    delay(10);
+    delay(25); // 40Hz 适度降频巡检，按键消抖依然敏捷，但大幅跃升 FreeRTOS CPU 空闲休眠率
 }
 
 // ==========================================

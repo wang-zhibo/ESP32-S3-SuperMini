@@ -30,8 +30,8 @@ void WiFiManager::begin() {
     // 开启 AP+STA 双模
     WiFi.mode(WIFI_AP_STA);
     WiFi.setAutoReconnect(true);
-    WiFi.setSleep(WIFI_PS_MIN_MODEM); // 启用 Modem-Sleep 深度节能模式，无流量时关闭高频锁相环，温度直降 15~20°C
-    WiFi.setTxPower(WIFI_POWER_11dBm); // 发射功率调谐至 11dBm (约 12mW)，比原 15dBm/19dBm 功耗降低 60% 以上，桌面与工位穿透稳定
+    WiFi.setSleep(WIFI_PS_MAX_MODEM); // 启用 Maximum Modem-Sleep 深度休眠模式，长周期多信标休眠，射频发热骤减
+    WiFi.setTxPower(WIFI_POWER_8_5dBm); // 发射功率精细收敛至 8.5dBm (约 7mW)，工位桌面通信完全溢出且再度削减发射电流
 
     // 启动热点
     WiFi.softAPConfig(apIP, apIP, netMsk);
