@@ -47,7 +47,7 @@ public:
     bool isCompanionConnected() const { return _isCompanionConnected; }
     bool hasBondedCompanion() const { return _hasBondedCompanion; }
     void onCompanionConnected(uint16_t connId, const uint8_t* remoteBda);
-    void onCompanionDisconnected();
+    void onCompanionDisconnected(uint16_t reason = 0);
     void onCompanionAuthComplete(bool success);
     void onConnParamsUpdated(uint8_t status, uint16_t connInt, uint16_t latency, uint16_t timeout);
     void onConnectionRssiRead(int rssi);
@@ -120,6 +120,8 @@ private:
     uint32_t       _connectedAtMs;
 
     // 苹果健康连接时序状态
+    bool           _pendingSecurityReq;
+    uint32_t       _securityReqDelayMs;
     bool           _pendingConnParamUpdate;
     uint32_t       _connParamUpdateDelayMs;
     uint8_t        _connParamRetryCount;

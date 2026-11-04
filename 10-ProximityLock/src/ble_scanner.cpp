@@ -27,11 +27,23 @@ class CompanionSecurityCallbacks : public BLESecurityCallbacks {
         } else {
             Serial.printf("\n⚠️ [BLE伴侣] 伴侣配对/加密异常 (状态码: 0x%x)\n", cmpl.fail_reason);
             Tracker.onCompanionAuthComplete(false);
-            // 密钥错位自愈优化：若由于对端删除了配对信息 (如用户在手机蓝牙设置里点了“忽略此设备”)
-            // 自动清除本地存储的该设备旧密钥，解除互锁，允许重新免输配对
+            // 全量密钥错位自愈优化：若由于对端删除了配对信息 (如用户在 iPhone 蓝牙设置里点了“忽略此设备”)
+            // 由于 iPhone 启用 RPA 随机地址，cmpl.bd_addr 可能与历史存储的 Identity 地址不同，
+            // 因此遍历清空本地全部陈旧 Bond 记录，彻底解除互锁，允许下次免输无缝重配
             if (cmpl.fail_reason == 0x05 || cmpl.fail_reason == 0x06 || cmpl.fail_reason == 0x08 || cmpl.fail_reason == 0x51) {
-                Serial.println("   • [密钥自愈] 对端密钥已失效，正在清除 ESP32 本地旧 Bond 记录以允许无缝重配...");
+                Serial.println("   • [密钥自愈] 对端密钥已失效，正在全量清理 ESP32 本地旧 Bond 记录以允许无缝重配...");
                 esp_ble_remove_bond_device(cmpl.bd_addr);
+                int devNum = esp_ble_get_bond_device_num();
+                if (devNum > 0) {
+                    esp_ble_bond_dev_t* devList = (esp_ble_bond_dev_t*)malloc(sizeof(esp_ble_bond_dev_t) * devNum);
+                    if (devList) {
+                        esp_ble_get_bond_device_list(&devNum, devList);
+                        for (int i = 0; i < devNum; i++) {
+                            esp_ble_remove_bond_device(devList[i].bd_addr);
+                        }
+                        free(devList);
+                    }
+                }
             }
         }
     }
@@ -96,13 +108,16 @@ class PhonePairServerCallbacks: public BLEServerCallbacks {
     }
 #endif
 
-    void onDisconnect(BLEServer* pServer) override {
-        Tracker.onCompanionDisconnected();
-    }
+    void onDisconnect(BLEServer* pServer) override {}
 
 #if defined(CONFIG_NIMBLE_ENABLED)
     void onDisconnect(BLEServer* pServer, ble_gap_conn_desc* desc) override {
-        Tracker.onCompanionDisconnected();
+        Tracker.onCompanionDisconnected(0);
+    }
+#else
+    void onDisconnect(BLEServer* pServer, esp_ble_gatts_cb_param_t* param) override {
+        uint16_t reason = param ? (uint16_t)param->disconnect.reason : 0;
+        Tracker.onCompanionDisconnected(reason);
     }
 #endif
 };
@@ -122,6 +137,8 @@ BLETracker::BLETracker()
       _connId(0),
       _lastRssiReadMs(0),
       _connectedAtMs(0),
+      _pendingSecurityReq(false),
+      _securityReqDelayMs(0),
       _pendingConnParamUpdate(false),
       _connParamUpdateDelayMs(0),
       _connParamRetryCount(0),
@@ -655,12 +672,6 @@ void BLETracker::onCompanionConnected(uint16_t connId, const uint8_t* remoteBda)
     _connId = connId;
     memcpy(_connectedBda, remoteBda, 6);
 
-    // NVS 防磨损优化：仅在首次绑定或关键字段缺失时才写入 Flash，彻底消除重连与 RPA 轮换时的 Flash 擦写阻塞
-    if (!_hasBondedCompanion) {
-        _hasBondedCompanion = true;
-        _prefs.putBool("comp_bonded", true);
-    }
-
     char buf[18];
     snprintf(buf, sizeof(buf), "%02x:%02x:%02x:%02x:%02x:%02x",
              remoteBda[0], remoteBda[1], remoteBda[2], remoteBda[3], remoteBda[4], remoteBda[5]);
@@ -688,13 +699,11 @@ void BLETracker::onCompanionConnected(uint16_t connId, const uint8_t* remoteBda)
         Serial.println("   • [射频优化] 伴侣直连已建立，暂停后台主动扫描，降低芯片发热与 2.4GHz 干扰。");
     }
 
-    // 主动向 iOS 发起从机安全加密恢复请求 (SMP Security Request / LTK Encryption)
-    // 确保即使 iOS 命中 GATT 缓存不主动读特征值，也能 100% 恢复加密链路与 CCCD 通知订阅
-#if defined(CONFIG_BLUEDROID_ENABLED)
-    esp_ble_set_encryption(_connectedBda, ESP_BLE_SEC_ENCRYPT);
-#elif defined(CONFIG_NIMBLE_ENABLED)
-    ble_gap_security_initiate(_connId);
-#endif
+    // 苹果加密时序避让（主机优先 + 800ms 从机兜底）：
+    // 连接建立前 800ms 让位给 iPhone 主机端发起原生 LL_ENC_REQ，避免 T=0ms 主从同时发请求碰撞；
+    // 若 800ms 后主机仍未发起加密（如命中异常缓存或首次配对），则由 ESP32 主动发起 SMP 加密恢复
+    _pendingSecurityReq = true;
+    _securityReqDelayMs = _connectedAtMs + 800;
 
     // 设定保底参数协商计时器 (4.5s)，一旦 onAuthenticationComplete 完成将自动提前至加密后 1.5s 触发
     _pendingConnParamUpdate = true;
@@ -706,8 +715,14 @@ void BLETracker::onCompanionConnected(uint16_t connId, const uint8_t* remoteBda)
 }
 
 void BLETracker::onCompanionAuthComplete(bool success) {
+    _pendingSecurityReq = false; // 主机或从机已完成安全握手，取消 800ms 加密兜底定时器
     if (!_isCompanionConnected) return;
     if (success) {
+        // 严格认证后落盘：仅当安全配对/加密真正通过后，才将 comp_bonded 持久化至 NVS（杜绝未认证闪断污染）
+        if (!_hasBondedCompanion) {
+            _hasBondedCompanion = true;
+            _prefs.putBool("comp_bonded", true);
+        }
         // 加密与绑定握手真正完成后，等待 1.5 秒让 iOS 完成 0x2902 CCCD 订阅，再平滑协商连接参数
         _pendingConnParamUpdate = true;
         _connParamUpdateDelayMs = millis() + 1500;
@@ -771,13 +786,24 @@ void BLETracker::applyCompanionConnParams() {
 #endif
 }
 
-void BLETracker::onCompanionDisconnected() {
+void BLETracker::onCompanionDisconnected(uint16_t reason) {
     _isCompanionConnected = false;
     _isAdvertising = false;
     _lastSeenMs = 0;
+    _pendingSecurityReq = false;
     _pendingConnParamUpdate = false;
     _connParamRetryCount = 0;
-    Serial.println("\n⚠️ [BLE伴侣] 伴侣设备已断开连接 (可能已离开工位). 正在重新开启广播等待回座秒连...");
+    _filter.reset(); // 断连立即清空历史弱信号包袱，确保下次重连第一帧直接对齐
+
+    const char* reasonDesc = "未知原因";
+    if (reason == 0x08)      reasonDesc = "信号超距超时 (0x08 Supervision Timeout)";
+    else if (reason == 0x13) reasonDesc = "对端主动断开/关闭蓝牙 (0x13 Peer User Terminated)";
+    else if (reason == 0x16) reasonDesc = "本地主机断开 (0x16 Local Host Terminated)";
+    else if (reason == 0x3E) reasonDesc = "边缘弱信号握手丢包闪断 (0x3E Conn Fail Establish)";
+    else if (reason == 0x05 || reason == 0x06) reasonDesc = "加密密钥失配 (0x05/0x06 Auth Failure)";
+
+    Serial.printf("\n⚠️ [BLE伴侣] 伴侣连接已断开 [原因: %s, 状态码: 0x%02x]. 正在重启极速广播等待秒连...\n",
+                  reasonDesc, reason);
 
     // 关键射频纯化优化：伴侣断开后，如果已绑定伴侣，严禁开启无意义的后台扫描！
     // 将 100% 射频硬件与 CPU 时钟全额交给 BLE 广播发射，杜绝天线争抢与时序抖动
@@ -839,15 +865,30 @@ void BLETracker::loop() {
     uint32_t now = millis();
 
     // 1. 如果处于伴侣直连保活状态：
-    //    a) 刚重连前 8 秒（回座靠近黄金窗口）采用 250ms (4Hz) 高刷采样，人走到桌前 0.3s 即刻亮屏解锁
-    //    b) 稳定在座满 8 秒后平滑切回 1000ms (1Hz) 恒温低功耗巡检
-    //    c) 每隔 10 分钟发送一次零干扰的 Battery Level 静默心跳，刷新 iOS bluetoothd 活跃权重
+    //    a) 刚重连前 8 秒、或处于离开确认期 (STATE_LEAVING)、或锁屏状态下检测到近场信号回升时，采用 250ms (4Hz) 敏捷高刷采样
+    //    b) 稳定在座或远距离静止时平滑切回 1000ms (1Hz) 恒温低功耗巡检
+    //    c) 800ms 加密观察窗兜底与 1.5s 延时连接参数自适应协商
+    //    d) 每隔 10 分钟发送一次零干扰的 Battery Level 静默心跳，刷新 iOS bluetoothd 活跃权重
     static uint32_t lastBatHeartbeatMs = 0;
     if (_isCompanionConnected) {
-        uint32_t rssiInterval = (now - _connectedAtMs < 8000) ? 250 : 1000;
+        bool needAgileRssi = (now - _connectedAtMs < 8000) ||
+                             (g_state == STATE_LEAVING) ||
+                             (g_state == STATE_LOCKED && _lastRawRssi >= g_lockRSSI);
+        uint32_t rssiInterval = needAgileRssi ? 250 : 1000;
         if (now - _lastRssiReadMs >= rssiInterval) {
             _lastRssiReadMs = now;
             readConnectionRssi();
+        }
+
+        // 800ms 从机加密恢复兜底（若 iPhone 主机端已在 800ms 内主动完成 LL_ENC_REQ 则已自动取消）
+        if (_pendingSecurityReq && (now >= _securityReqDelayMs)) {
+            _pendingSecurityReq = false;
+#if defined(CONFIG_BLUEDROID_ENABLED)
+            esp_ble_set_encryption(_connectedBda, ESP_BLE_SEC_ENCRYPT);
+#elif defined(CONFIG_NIMBLE_ENABLED)
+            ble_gap_security_initiate(_connId);
+#endif
+            Serial.println("   • [安全兜底] 800ms 观察窗已满，从机主动发起 SMP 安全加密恢复请求...");
         }
 
         // 苹果健康时序：待加密握手与 CCCD 订阅完成后平滑协商参数（支持失败自动二级重试）
