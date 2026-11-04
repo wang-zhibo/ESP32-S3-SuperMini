@@ -48,6 +48,8 @@ public:
     bool hasBondedCompanion() const { return _hasBondedCompanion; }
     void onCompanionConnected(uint16_t connId, const uint8_t* remoteBda);
     void onCompanionDisconnected();
+    void onCompanionAuthComplete(bool success);
+    void onConnParamsUpdated(uint8_t status, uint16_t connInt, uint16_t latency, uint16_t timeout);
     void onConnectionRssiRead(int rssi);
     void readConnectionRssi();
     void disconnectCompanion();
@@ -94,11 +96,13 @@ private:
     friend class CompanionSecurityCallbacks;
     void onDeviceScanned(BLEAdvertisedDevice* device);
 
-    Preferences    _prefs;
-    BLEScan*       _pBLEScan;
-    BLEServer*     _pServer;
-    BLEHIDDevice*  _pHid;
-    RSSIFilter     _filter;
+    Preferences        _prefs;
+    BLEScan*           _pBLEScan;
+    BLEServer*         _pServer;
+    BLEHIDDevice*      _pHid;
+    BLECharacteristic* _pInputMouse;
+    BLECharacteristic* _pInputConsumer;
+    RSSIFilter         _filter;
 
     bool           _hasBoundDevice;
     String         _boundMAC;
@@ -113,10 +117,12 @@ private:
     uint16_t       _connId;
     uint8_t        _connectedBda[6];
     uint32_t       _lastRssiReadMs;
+    uint32_t       _connectedAtMs;
 
     // 苹果健康连接时序状态
     bool           _pendingConnParamUpdate;
     uint32_t       _connParamUpdateDelayMs;
+    uint8_t        _connParamRetryCount;
     bool           _isFastAdv;
     uint32_t       _fastAdvStartMs;
     void           applyCompanionConnParams();
