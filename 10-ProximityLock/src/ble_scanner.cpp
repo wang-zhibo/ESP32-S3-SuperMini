@@ -833,7 +833,10 @@ void BLETracker::onCompanionDisconnected(uint16_t reason) {
 }
 
 void BLETracker::onConnectionRssiRead(int rssi) {
-    if (rssi != 127 && rssi < 0) {
+    // 物理层底噪过滤：ESP32-S3 BLE 1M PHY 接收灵敏度极限为 -97 dBm。
+    // 当启用苹果低功耗 Slave Latency 时，若恰在潜伏轮空时间槽读取寄存器会返回约 -114 dBm 的射频底噪，
+    // 严格剔除 < -98 dBm 的无效轮空底噪，防止在座状态下信号曲线发生假性下拉抖动。
+    if (rssi >= -98 && rssi < 0) {
         _lastRawRssi = rssi;
         _filter.update((float)rssi);
         _lastSeenMs = millis();
