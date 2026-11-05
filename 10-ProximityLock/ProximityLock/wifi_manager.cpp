@@ -20,18 +20,20 @@ void WiFiManager::begin() {
     _ssid = _prefs.getString("sta_ssid", "");
     _pass = _prefs.getString("sta_pass", "");
 
-    // 自动根据 ESP32-S3 MAC 生成独立 AP 名称，例如 ProximityLock-70F8
+    // 自动根据 ESP32-S3 MAC 生成独立 AP 名称与唯一 mDNS 域名，例如 ProximityLock-70F8 / proximitylock-70f8.local
     uint8_t mac[6];
     WiFi.macAddress(mac);
     char buf[32];
     snprintf(buf, sizeof(buf), "ProximityLock-%02X%02X", mac[4], mac[5]);
     _apName = String(buf);
+    snprintf(buf, sizeof(buf), "proximitylock-%02x%02x", mac[4], mac[5]);
+    _mdnsName = String(buf);
 
     // 开启 AP+STA 双模
     WiFi.mode(WIFI_AP_STA);
     WiFi.setAutoReconnect(true);
-    WiFi.setSleep(WIFI_PS_MAX_MODEM); // 启用 Maximum Modem-Sleep 深度休眠模式，长周期多信标休眠，射频发热骤减
-    WiFi.setTxPower(WIFI_POWER_8_5dBm); // 发射功率精细收敛至 8.5dBm (约 7mW)，工位桌面通信完全溢出且再度削减发射电流
+    WiFi.setSleep(WIFI_PS_MIN_MODEM); // 启用 Minimum Modem-Sleep (按路由器 DTIM 周期唤醒)，兼顾低发热与局域网 ARP 广播 100% 响应
+    WiFi.setTxPower(WIFI_POWER_13dBm); // 发射功率设为 13dBm (约 20mW)，确保关闭 AP 后上行 ARP 应答与网页访问稳定不丢包
 
     // 启动热点
     WiFi.softAPConfig(apIP, apIP, netMsk);
@@ -75,10 +77,10 @@ void WiFiManager::loop() {
                 Serial.printf("   • 信号强度: %d dBm\n", WiFi.RSSI());
                 Serial.println("   • 提示: 路由器稳定连接 30 秒后将自动关闭 AP 热点以节省能耗与降温。\n");
 
-                // 启动 mDNS 域名: http://proximitylock.local
-                if (MDNS.begin("proximitylock")) {
+                // 启动独立尾号 mDNS 域名: 例如 http://proximitylock-70f8.local (避免同局域网多设备域名冲突)
+                if (MDNS.begin(_mdnsName.c_str())) {
                     MDNS.addService("http", "tcp", 80);
-                    Serial.println("   • mDNS 服务已上线: http://proximitylock.local\n");
+                    Serial.printf("   • mDNS 服务已上线: http://%s.local\n\n", _mdnsName.c_str());
                 }
             } else if (now - _connectStartMs >= 15000) {
                 _connecting = false;
@@ -182,6 +184,7 @@ void WiFiManager::disableAP() {
     WiFi.softAPdisconnect(true);
     if (isConnected()) {
         WiFi.mode(WIFI_STA);
+        WiFi.setSleep(WIFI_PS_MIN_MODEM);
     } else {
         WiFi.mode(WIFI_OFF);
     }

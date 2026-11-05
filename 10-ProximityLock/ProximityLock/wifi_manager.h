@@ -21,6 +21,7 @@ public:
     String getSSID() const { return _ssid; }
     int    getRSSI() const;
     String getAPName() const { return _apName; }
+    String getMDNSName() const { return _mdnsName; }
 
     void saveWiFiConfig(const String& ssid, const String& pass);
     void resetWiFiConfig();
@@ -34,6 +35,7 @@ private:
     String      _ssid;
     String      _pass;
     String      _apName;
+    String      _mdnsName;
     bool        _apActive;
     bool        _connecting;
     uint32_t    _connectStartMs;

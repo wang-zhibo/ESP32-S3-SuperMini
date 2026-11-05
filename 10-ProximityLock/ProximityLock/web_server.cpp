@@ -74,6 +74,7 @@ void WebService::registerRoutes() {
         json += "\"os_str\":\"" + String(osNames[g_osMode]) + "\",";
         json += "\"bound_mac\":\"" + Tracker.getBoundMAC() + "\",";
         json += "\"bound_name\":\"" + Tracker.getBoundName() + "\",";
+        json += "\"ble_name\":\"" + Tracker.getBLEName() + "\",";
         json += "\"current_rssi\":" + String(Tracker.getFilteredRSSI(), 1) + ",";
         json += "\"raw_rssi\":" + String(Tracker.getLastRawRSSI()) + ",";
         json += "\"last_seen_sec\":" + String(Tracker.getLastSeenElapsed() / 1000) + ",";
@@ -107,6 +108,7 @@ void WebService::registerRoutes() {
         json += "\"ssid\":\"" + WiFiMgr.getSSID() + "\",";
         json += "\"rssi\":" + String(WiFiMgr.getRSSI()) + ",";
         json += "\"ap_name\":\"" + WiFiMgr.getAPName() + "\",";
+        json += "\"mdns\":\"" + WiFiMgr.getMDNSName() + ".local\",";
         json += "\"ap_active\":" + String(WiFiMgr.isAPActive() ? "true" : "false") + ",";
         json += "\"ap_remain_sec\":" + String(WiFiMgr.getAPShutdownRemainSec());
         json += "}}";

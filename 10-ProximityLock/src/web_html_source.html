@@ -504,7 +504,7 @@
         <div style="font-size:12px; color:#cbd5e1; line-height:1.6; margin-bottom:12px;">
           ⭐ <b>全平台最强保镖模式（通杀 iPhone / Apple Watch / 安卓手机与手表）</b>：<br>
           1. 打开您的手机或手表的<b>【系统设置】→【蓝牙】</b>；<br>
-          2. 在可用设备列表中搜索并点击连接：<b style="color:var(--accent-blue); font-size:14px; font-family:monospace; background:rgba(56, 189, 248, 0.15); padding:2px 8px; border-radius:4px; display:inline-block; margin:2px 0;">ProximityLock-伴侣</b>；<br>
+          2. 在可用设备列表中搜索并点击连接：<b id="bleAdvNameTag" style="color:var(--accent-blue); font-size:14px; font-family:monospace; background:rgba(56, 189, 248, 0.15); padding:2px 8px; border-radius:4px; display:inline-block; margin:2px 0;">ProximityLock-XXXX</b>；<br>
           3. 屏幕弹出系统配对窗口时，直接点击<b>【配对】</b>即可建立安全受信任连接！<br>
           4. <b>效果</b>：彻底杜绝 MAC 变动，即使手机黑屏放进口袋也不会断流误锁；走远物理断开即锁，回座自动重连即开！
         </div>
@@ -957,6 +957,10 @@
       }
 
       // 伴侣直连状态更新
+      const bleAdvNameTag = document.getElementById('bleAdvNameTag');
+      if (bleAdvNameTag && (data.ble_name || (data.wifi && data.wifi.ap_name))) {
+        bleAdvNameTag.innerText = data.ble_name || data.wifi.ap_name;
+      }
       const compBadge = document.getElementById('companionStatusBadge');
       const compConnectedBox = document.getElementById('companionConnectedBox');
       const compDetailText = document.getElementById('companionDetailText');
@@ -1047,6 +1051,7 @@
       // Tab 1: Dashboard Net Info Card
       let netHtml = '';
       if (wifi.connected) {
+        const mdnsHost = wifi.mdns || 'proximitylock.local';
         netHtml = `
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
             <span style="color:var(--text-sub); font-size:13px;">内网局域网访问地址</span>
@@ -1054,7 +1059,7 @@
           </div>
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
             <span style="color:var(--text-sub); font-size:13px;">局域网免记域名 (mDNS)</span>
-            <a href="http://proximitylock.local" target="_blank" style="color:var(--accent-green); font-weight:700; text-decoration:none;">http://proximitylock.local ↗</a>
+            <a href="http://${mdnsHost}" target="_blank" style="color:var(--accent-green); font-weight:700; text-decoration:none;">http://${mdnsHost} ↗</a>
           </div>
           <div style="display:flex; justify-content:space-between; align-items:center; font-size:12px; color:#64748b; padding-top:6px; border-top:1px solid rgba(255,255,255,0.05);">
             <span>已连路由器: <b>${wifi.ssid}</b> (${wifi.rssi} dBm)</span>
@@ -1232,7 +1237,7 @@
       try {
         const res = await fetch('/api/ble/phone_pair/start', { method: 'POST' });
         const d = await res.json();
-        showToast(d.msg || '手机配对广播已开启 (ProximityLock-配对)');
+        showToast(d.msg || '手机配对广播已开启');
         fetchStatus();
       } catch (e) {
         showToast('开启配对模式失败');

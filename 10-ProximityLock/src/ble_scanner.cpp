@@ -1,4 +1,5 @@
 #include "ble_scanner.h"
+#include <WiFi.h>
 #include <algorithm>
 
 #if !defined(CONFIG_NIMBLE_ENABLED)
@@ -165,7 +166,14 @@ void BLETracker::begin() {
     _hasBondedCompanion = _prefs.getBool("comp_bonded", false);
     _hasBoundDevice = (_boundMAC.length() == 17) || _hasBondedCompanion;
 
-    BLEDevice::init("ProximityLock-伴侣");
+    // 自动根据芯片唯一 MAC 后 4 位生成专属蓝牙名 (如 ProximityLock-70F8 / ProximityLock-D7BA)，与板载 Wi-Fi 热点尾号完全一致，多设备同屋绝不混淆
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    char nameBuf[32];
+    snprintf(nameBuf, sizeof(nameBuf), "ProximityLock-%02X%02X", mac[4], mac[5]);
+    _bleName = String(nameBuf);
+
+    BLEDevice::init(_bleName.c_str());
 #if defined(CONFIG_BLUEDROID_ENABLED)
     BLEDevice::setCustomGapHandler(customGapHandler);
 #endif
@@ -296,7 +304,7 @@ void BLETracker::begin() {
 
     // 核心优化 2: 扫描响应包单独放置设备完整名称 (黑屏被动扫描不请求，点亮屏幕或主动搜索时展示)
     BLEAdvertisementData scanRespData;
-    scanRespData.setName("ProximityLock-伴侣");
+    scanRespData.setName(_bleName.c_str());
 
     pAdv->setAdvertisementData(advData);
     pAdv->setScanResponseData(scanRespData);
@@ -323,7 +331,7 @@ void BLETracker::begin() {
         Serial.println("   • [射频纯化] 已绑定手机伴侣，抑制后台盲扫，全额释放 2.4GHz 射频资源供广播直连。");
     }
 
-    Serial.printf("[BLE] 伴侣直连服务已就绪. 广播名称: ProximityLock-伴侣\n");
+    Serial.printf("[BLE] 伴侣直连服务已就绪. 广播名称: %s\n", _bleName.c_str());
     Serial.printf("   • 绑定状态: %s (%s, %s)\n", 
                   isPaired() ? "已就绪" : "等待配对", 
                   _boundMAC.length() > 0 ? _boundMAC.c_str() : "等待直连",
@@ -620,7 +628,7 @@ void BLETracker::startPhonePairMode(uint32_t timeoutMs) {
     _incomingPairMAC = "";
     BLEDevice::startAdvertising();
     _isAdvertising = true;
-    Serial.printf("[BLE] 开启手机主动连接配对广播 (名称: ProximityLock-伴侣, 限时 %lu 秒)...\n", timeoutMs / 1000);
+    Serial.printf("[BLE] 开启手机主动连接配对广播 (名称: %s, 限时 %lu 秒)...\n", _bleName.c_str(), timeoutMs / 1000);
 }
 
 void BLETracker::stopPhonePairMode() {

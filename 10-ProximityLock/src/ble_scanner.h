@@ -39,6 +39,7 @@ public:
     bool isPaired() const { return _hasBoundDevice || _hasBondedCompanion || _isCompanionConnected; }
     String getBoundMAC() const { return _boundMAC; }
     String getBoundName() const { return _boundName; }
+    String getBLEName() const { return _bleName; }
     void clearBond();
     void startPairing(uint32_t timeoutMs = 8000);
     bool checkPairingFinished();
@@ -107,6 +108,7 @@ private:
     bool           _hasBoundDevice;
     String         _boundMAC;
     String         _boundName;
+    String         _bleName;
     uint32_t       _lastSeenMs;
     int            _lastRawRssi;
 

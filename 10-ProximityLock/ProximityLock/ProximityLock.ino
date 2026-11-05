@@ -498,6 +498,23 @@ void handleSerialCLI() {
         arg.toLowerCase();
         g_monitorEnabled = (arg == "on" || arg == "1");
         Serial.printf("实时信号监控图表: %s\n", g_monitorEnabled ? "已开启" : "已关闭");
+    } else if (cmd == "wifi") {
+        if (arg == "clear" || arg == "reset") {
+            WiFiMgr.resetWiFiConfig();
+        } else {
+            int sp = arg.indexOf(' ');
+            if (sp != -1) {
+                String ssid = arg.substring(0, sp);
+                String pass = arg.substring(sp + 1);
+                ssid.trim();
+                pass.trim();
+                WiFiMgr.saveWiFiConfig(ssid, pass);
+            } else if (arg.length() > 0) {
+                WiFiMgr.saveWiFiConfig(arg, "");
+            } else {
+                Serial.println("用法: wifi <SSID> <密码> | wifi clear");
+            }
+        }
     } else {
         Serial.printf("未知指令: '%s'. 输入 'help' 查看支持的命令.\n", cmd.c_str());
     }
@@ -508,6 +525,7 @@ void printStatus() {
     const char* stateNames[] = {"未配对", "配对中", "在场(工作中)", "离开预警", "已锁定", "会议免打扰"};
 
     Serial.println("\n----------------- 当前运行状态 -----------------");
+    Serial.printf("本机蓝牙名称 : %s\n", Tracker.getBLEName().c_str());
     Serial.printf("绑定设备 MAC : %s (%s)\n", 
                   Tracker.isPaired() ? Tracker.getBoundMAC().c_str() : "未绑定",
                   Tracker.getBoundName().length() > 0 ? Tracker.getBoundName().c_str() : "无备注");
@@ -543,6 +561,7 @@ void printHelp() {
     Serial.println("  lock             : 立即测试一次锁屏按键发送");
     Serial.println("  wake             : 立即测试一次屏幕唤醒");
     Serial.println("  unlock           : 立即测试一次开屏解锁与密码输入");
+    Serial.println("  wifi <SSID> <密码>: 串口直接配置路由器 Wi-Fi 并连接");
     Serial.println("  monitor <on|off> : 开启/关闭控制台 ASCII 实时信号柱状图");
     Serial.println("-----------------------------------");
 }
