@@ -340,8 +340,8 @@ void WebService::registerRoutes() {
         Tracker.pauseScan();
         delay(50);
 
-        // 2. 执行快速扫描：常规网络，单信道 80ms 快速捕获 (总耗时约 1 秒，杜绝超时)
-        int16_t n = WiFi.scanNetworks(false, false, false, 80);
+        // 2. 执行扫描：开放 1~13 信道，单信道驻留 130ms (涵盖 100ms/120ms Beacon 周期与双频合一AP)，开启主动探测包含隐藏SSID
+        int16_t n = WiFi.scanNetworks(false, true, false, 130);
 
         // 3. 扫描结束立即恢复 BLE 持续扫描
         Tracker.resumeScan();

@@ -1,4 +1,5 @@
 #include "wifi_manager.h"
+#include <esp_wifi.h>
 
 WiFiManager WiFiMgr;
 
@@ -31,6 +32,17 @@ void WiFiManager::begin() {
 
     // 开启 AP+STA 双模
     WiFi.mode(WIFI_AP_STA);
+
+    // 配置中国区国家码 (CN)，开放信道 1~13，完美支持工作在 12/13 高信道的双频合一/现代路由器
+    wifi_country_t country = {
+        .cc = "CN",
+        .schan = 1,
+        .nchan = 13,
+        .max_tx_power = 20,
+        .policy = WIFI_COUNTRY_POLICY_AUTO
+    };
+    esp_wifi_set_country(&country);
+
     WiFi.setAutoReconnect(true);
     WiFi.setSleep(WIFI_PS_MIN_MODEM); // 启用 Minimum Modem-Sleep (按路由器 DTIM 周期唤醒)，兼顾低发热与局域网 ARP 广播 100% 响应
     WiFi.setTxPower(WIFI_POWER_13dBm); // 发射功率设为 13dBm (约 20mW)，确保关闭 AP 后上行 ARP 应答与网页访问稳定不丢包
