@@ -11,7 +11,57 @@ WebService WebServ;
 static String s_otaErrorMsg = "";
 static bool   s_otaHeaderChecked = false;
 
-WebService::WebService() : _server(80) {}
+WebService::WebService() : _server(80), _authUser("admin"), _authPass("admin") {}
+
+void WebService::loadCredentials() {
+    _prefs.begin("prox_auth", false);
+    _authUser = _prefs.getString("user", "admin");
+    _authPass = _prefs.getString("pass", "admin");
+    _prefs.end();
+    generateSessionToken();
+}
+
+void WebService::generateSessionToken() {
+    uint32_t r1 = esp_random();
+    uint32_t r2 = esp_random();
+    char buf[33];
+    snprintf(buf, sizeof(buf), "%08x%08x%08x%08x", r1, r2, (uint32_t)millis(), (uint32_t)micros());
+    _sessionToken = String(buf);
+}
+
+void WebService::resetAuth() {
+    _prefs.begin("prox_auth", false);
+    _prefs.putString("user", "admin");
+    _prefs.putString("pass", "admin");
+    _prefs.end();
+    _authUser = "admin";
+    _authPass = "admin";
+    generateSessionToken();
+    Serial.println("[Auth] 后台登录凭证已重置为默认值 (admin / admin)");
+}
+
+bool WebService::checkAuth() {
+    // 1. 优先检查请求头 X-Session-Token
+    if (_server.hasHeader("X-Session-Token")) {
+        if (_server.header("X-Session-Token") == _sessionToken) return true;
+    }
+    // 2. 检查 Query 参数 token
+    if (_server.hasArg("token")) {
+        if (_server.arg("token") == _sessionToken) return true;
+    }
+    // 3. 检查 Cookie: prox_token=xxxx
+    if (_server.hasHeader("Cookie")) {
+        String cookie = _server.header("Cookie");
+        int pos = cookie.indexOf("prox_token=");
+        if (pos != -1) {
+            int endP = cookie.indexOf(';', pos);
+            String t = (endP == -1) ? cookie.substring(pos + 11) : cookie.substring(pos + 11, endP);
+            t.trim();
+            if (t == _sessionToken) return true;
+        }
+    }
+    return false;
+}
 
 static void sendJsonHeaders(WebServer& server) {
     server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
@@ -21,9 +71,12 @@ static void sendJsonHeaders(WebServer& server) {
 }
 
 void WebService::begin() {
+    loadCredentials();
+    const char* headerkeys[] = {"Cookie", "X-Session-Token"};
+    _server.collectHeaders(headerkeys, 2);
     registerRoutes();
     _server.begin();
-    Serial.println("[Web] HTTP Web 管理后台已启动在端口 80.");
+    Serial.printf("[Web] HTTP Web 管理后台已启动在端口 80 (管理员: %s).\n", _authUser.c_str());
 }
 
 void WebService::loop() {
@@ -33,6 +86,7 @@ void WebService::loop() {
 void WebService::registerRoutes() {
     // 1. 首页 (Gzip 高度压缩 PROGMEM 直出)
     _server.on("/", HTTP_GET, [this]() {
+        sendJsonHeaders(_server);
         _server.sendHeader("Content-Encoding", "gzip");
         _server.send_P(200, "text/html; charset=utf-8", (const char*)htmlPageGz, htmlPageGz_len);
     });
@@ -111,6 +165,10 @@ void WebService::registerRoutes() {
         json += "\"mdns\":\"" + WiFiMgr.getMDNSName() + ".local\",";
         json += "\"ap_active\":" + String(WiFiMgr.isAPActive() ? "true" : "false") + ",";
         json += "\"ap_remain_sec\":" + String(WiFiMgr.getAPShutdownRemainSec());
+        json += "},";
+        json += "\"auth\":{";
+        json += "\"logged_in\":" + String(checkAuth() ? "true" : "false") + ",";
+        json += "\"user\":\"" + _authUser + "\"";
         json += "}}";
 
         _server.send(200, "application/json", json);
@@ -443,6 +501,82 @@ void WebService::registerRoutes() {
         [this]() { handleUpdateUpload(); }
     );
 
+    // ==========================================
+    // 后台身份认证与密码管理接口
+    // ==========================================
+    // 17. 登录校验与 Token 发放
+    _server.on("/api/auth/login", HTTP_POST, [this]() {
+        sendJsonHeaders(_server);
+        String user = _server.arg("user");
+        String pass = _server.arg("pass");
+        user.trim();
+        pass.trim();
+
+        if (user == _authUser && pass == _authPass) {
+            generateSessionToken();
+            _server.sendHeader("Set-Cookie", "prox_token=" + _sessionToken + "; Path=/; HttpOnly; SameSite=Lax");
+            String json = "{\"ok\":true,\"msg\":\"登录成功！\",\"token\":\"" + _sessionToken + "\",\"user\":\"" + _authUser + "\"}";
+            _server.send(200, "application/json", json);
+            Serial.printf("[Auth] 用户 [%s] 登录成功\n", user.c_str());
+        } else {
+            _server.send(401, "application/json", "{\"ok\":false,\"msg\":\"账号或密码错误\"}");
+            Serial.printf("[Auth] 用户 [%s] 密码校验失败\n", user.c_str());
+        }
+    });
+
+    // 18. 登出
+    _server.on("/api/auth/logout", HTTP_POST, [this]() {
+        sendJsonHeaders(_server);
+        generateSessionToken(); // 刷新 Token 使原有 Token 作废
+        _server.sendHeader("Set-Cookie", "prox_token=; Path=/; Max-Age=0");
+        _server.send(200, "application/json", "{\"ok\":true,\"msg\":\"已退出登录\"}");
+    });
+
+    // 19. 修改后台管理员账号与密码
+    _server.on("/api/auth/password", HTTP_POST, [this]() {
+        sendJsonHeaders(_server);
+        if (!checkAuth()) {
+            _server.send(401, "application/json", "{\"ok\":false,\"msg\":\"未授权，请先登录\"}");
+            return;
+        }
+
+        String oldPass = _server.arg("old_pass");
+        String newUser = _server.arg("new_user");
+        String newPass = _server.arg("new_pass");
+        oldPass.trim();
+        newUser.trim();
+        newPass.trim();
+
+        if (oldPass != _authPass) {
+            _server.send(400, "application/json", "{\"ok\":false,\"msg\":\"原密码不正确\"}");
+            return;
+        }
+
+        if (newPass.length() < 3) {
+            _server.send(400, "application/json", "{\"ok\":false,\"msg\":\"新密码至少需要3个字符\"}");
+            return;
+        }
+
+        if (newUser.length() == 0) {
+            newUser = _authUser;
+        }
+
+        _authUser = newUser;
+        _authPass = newPass;
+
+        _prefs.begin("prox_auth", false);
+        _prefs.putString("user", _authUser);
+        _prefs.putString("pass", _authPass);
+        _prefs.end();
+
+        generateSessionToken(); // 换新凭证后更新 Token
+        _server.sendHeader("Set-Cookie", "prox_token=" + _sessionToken + "; Path=/; HttpOnly; SameSite=Lax");
+        
+        Serial.printf("[Auth] 管理员凭证已更新: 用户名 [%s]\n", _authUser.c_str());
+        String json = "{\"ok\":true,\"msg\":\"管理员账号密码修改成功！\",\"token\":\"" + _sessionToken + "\",\"user\":\"" + _authUser + "\"}";
+        _server.send(200, "application/json", json);
+    });
+
     // 404 / 门户探测自动重定向
     _server.onNotFound([this]() {
         if (!WiFiMgr.isConnected()) {
@@ -456,6 +590,15 @@ void WebService::registerRoutes() {
 
 void WebService::handleUpdate() {
     sendJsonHeaders(_server);
+    if (!checkAuth()) {
+        String unauthHtml = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>需要管理员权限</title>";
+        unauthHtml += "<style>body{background:#0b0f19;color:#fff;font-family:sans-serif;text-align:center;padding:80px 20px;}";
+        unauthHtml += ".card{background:rgba(23,32,54,0.85);max-width:380px;margin:0 auto;padding:32px;border-radius:16px;border:1px solid rgba(255,255,255,0.1);}</style></head><body>";
+        unauthHtml += "<div class='card'><h2>🔒 需要管理员登录</h2><p style='color:#94a3b8;font-size:14px;'>请先登录 ProximityLock 主控制台后再进行 OTA 无线固件升级。</p>";
+        unauthHtml += "<a href='/' style='color:#38bdf8;text-decoration:none;font-weight:bold;'>← 返回控制台登录</a></div></body></html>";
+        _server.send(401, "text/html; charset=utf-8", unauthHtml);
+        return;
+    }
     String html = "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
     html += "<title>固件无线升级 (OTA Update)</title>";
     html += "<style>";
@@ -596,6 +739,10 @@ void WebService::handleUpdateDone() {
 }
 
 void WebService::handleUpdateUpload() {
+    if (!checkAuth()) {
+        s_otaErrorMsg = "未授权上传，请先登录后台！";
+        return;
+    }
     HTTPUpload& upload = _server.upload();
     if (upload.status == UPLOAD_FILE_START) {
         s_otaErrorMsg = "";

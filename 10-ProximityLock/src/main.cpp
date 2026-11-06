@@ -515,6 +515,13 @@ void handleSerialCLI() {
                 Serial.println("用法: wifi <SSID> <密码> | wifi clear");
             }
         }
+    } else if (cmd == "auth") {
+        if (arg == "reset") {
+            WebServ.resetAuth();
+            Serial.println("Web 后台账号密码已重置为: admin / admin");
+        } else {
+            Serial.println("用法: auth reset (重置后台管理员账号密码为 admin / admin)");
+        }
     } else {
         Serial.printf("未知指令: '%s'. 输入 'help' 查看支持的命令.\n", cmd.c_str());
     }
@@ -562,6 +569,7 @@ void printHelp() {
     Serial.println("  wake             : 立即测试一次屏幕唤醒");
     Serial.println("  unlock           : 立即测试一次开屏解锁与密码输入");
     Serial.println("  wifi <SSID> <密码>: 串口直接配置路由器 Wi-Fi 并连接");
+    Serial.println("  auth reset       : 重置 Web 后台账号密码为默认 (admin / admin)");
     Serial.println("  monitor <on|off> : 开启/关闭控制台 ASCII 实时信号柱状图");
     Serial.println("-----------------------------------");
 }

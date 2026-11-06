@@ -401,15 +401,18 @@
         <div>
           <div style="display:flex; align-items:center; gap:8px;">
             <div class="brand-title">ProximityLock</div>
-            <span style="font-size:10px; background:rgba(56, 189, 248, 0.15); color:var(--accent-blue); padding:1px 6px; border-radius:6px; font-weight:700; border:1px solid rgba(56, 189, 248, 0.3);" id="dashFirmwareVersion">v2.1.0</span>
+            <span style="font-size:10px; background:rgba(56, 189, 248, 0.15); color:var(--accent-blue); padding:1px 6px; border-radius:6px; font-weight:700; border:1px solid rgba(56, 189, 248, 0.3);" id="dashFirmwareVersion">v2.8.0</span>
           </div>
           <div class="brand-sub">ESP32-S3 物理锁屏保镖</div>
         </div>
       </div>
       <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
-        <div class="status-badge" id="headerStatusBadge">
-          <span class="status-dot dot-unpaired" id="headerStatusDot"></span>
-          <span id="headerStatusText">连接中...</span>
+        <div style="display:flex; align-items:center; gap:6px;">
+          <div class="status-badge" id="headerStatusBadge">
+            <span class="status-dot dot-unpaired" id="headerStatusDot"></span>
+            <span id="headerStatusText">连接中...</span>
+          </div>
+          <button id="headerLogoutBtn" style="display:none; background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.3); color:#fca5a5; border-radius:8px; padding:3px 8px; font-size:11px; cursor:pointer;" onclick="logoutAdmin()" title="退出后台登录">退出</button>
         </div>
         <div class="status-badge" id="headerWifiBadge" style="font-size:11px; padding:3px 10px;">
           <span class="status-dot dot-unpaired" id="headerWifiDot"></span>
@@ -750,6 +753,31 @@
         <button class="btn btn-primary btn-block" style="margin-bottom:10px; background:linear-gradient(135deg,#0284c7,#0369a1);" onclick="window.open('/update', '_blank')">🚀 固件无线 OTA 升级 (新标签页打开)</button>
         <button class="btn btn-secondary btn-block" onclick="rebootSystem()">🔁 软重启 ESP32-S3</button>
       </div>
+
+      <!-- 管理员安全与密码修改卡片 -->
+      <div class="card">
+        <div class="card-title">🔐 Web 管理员密码修改</div>
+        <div style="font-size:12px; color:var(--text-sub); margin-bottom:12px;">
+          修改后台管理账号与登录密码，防止局域网内其他人员访问你的设备控制台。
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">管理员账号</div>
+          <input type="text" class="input-text" id="adminUserVal" placeholder="管理员账号 (默认 admin)">
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">当前旧密码</div>
+          <input type="password" class="input-text" id="adminOldPass" placeholder="输入当前旧密码 (默认 admin)">
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">新登录密码</div>
+          <input type="password" class="input-text" id="adminNewPass" placeholder="输入新密码 (至少3位)">
+        </div>
+
+        <button class="btn btn-primary btn-block" onclick="changeAdminPassword()">💾 确认修改后台密码</button>
+      </div>
     </div>
   </div>
 
@@ -778,9 +806,138 @@
     </div>
   </div>
 
+  <!-- 管理员登录遮罩弹窗 -->
+  <div id="loginModal" class="modal-overlay" style="z-index:9999;">
+    <div class="modal-box" style="max-width:340px;">
+      <div style="font-size:36px; margin-bottom:8px;">🔒</div>
+      <h3 style="margin:0 0 6px 0; color:#fff; font-size:18px;">ProximityLock 管理后台</h3>
+      <div style="font-size:12px; color:var(--text-sub); margin-bottom:16px;">
+        请输入管理员凭证以解锁设备监控与控制
+      </div>
+      <div class="form-group" style="text-align:left; margin-bottom:12px;">
+        <div class="form-label">账号</div>
+        <input type="text" class="input-text" id="loginUser" placeholder="管理员账号 (默认 admin)" value="admin">
+      </div>
+      <div class="form-group" style="text-align:left; margin-bottom:16px;">
+        <div class="form-label">密码</div>
+        <input type="password" class="input-text" id="loginPass" placeholder="管理员密码 (默认 admin)" onkeydown="if(event.key==='Enter')doLogin()">
+      </div>
+      <button class="btn btn-primary btn-block" onclick="doLogin()">🚀 登 录</button>
+      <div style="font-size:11px; color:#64748b; margin-top:10px;">
+        提示: 首次使用默认账号 admin / 密码 admin
+      </div>
+    </div>
+  </div>
+
   <script>
     let currentOS = 0;
     let pollInterval = null;
+    let authToken = localStorage.getItem('prox_auth_token') || '';
+
+    // 封装通用 API 请求，自动注入鉴权 Header
+    async function apiFetch(url, options = {}) {
+      options.headers = options.headers || {};
+      if (authToken) {
+        if (options.headers instanceof Headers) {
+          options.headers.set('X-Session-Token', authToken);
+        } else {
+          options.headers['X-Session-Token'] = authToken;
+        }
+      }
+      const res = await window.fetch(url, options);
+      if (res.status === 401 && !url.includes('/api/auth/login')) {
+        showLoginModal(true);
+      }
+      return res;
+    }
+
+    function showLoginModal(show) {
+      const modal = document.getElementById('loginModal');
+      if (modal) {
+        if (show) modal.classList.add('active');
+        else modal.classList.remove('active');
+      }
+      const logoutBtn = document.getElementById('headerLogoutBtn');
+      if (logoutBtn) logoutBtn.style.display = show ? 'none' : 'inline-block';
+    }
+
+    async function doLogin() {
+      const u = document.getElementById('loginUser')?.value.trim();
+      const p = document.getElementById('loginPass')?.value.trim();
+      if (!u || !p) {
+        alert('请输入账号和密码！');
+        return;
+      }
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `user=${encodeURIComponent(u)}&pass=${encodeURIComponent(p)}`
+        });
+        const d = await res.json();
+        if (d.ok && d.token) {
+          authToken = d.token;
+          localStorage.setItem('prox_auth_token', authToken);
+          showToast('🎉 登录成功');
+          showLoginModal(false);
+          document.getElementById('loginPass').value = '';
+          fetchStatus();
+          loadSettings();
+        } else {
+          alert('❌ ' + (d.msg || '账号或密码错误'));
+        }
+      } catch (e) {
+        alert('登录请求失败: ' + e.message);
+      }
+    }
+
+    async function logoutAdmin() {
+      if (!confirm('确定要退出当前管理员登录吗？')) return;
+      try {
+        await apiFetch('/api/auth/logout', { method: 'POST' });
+      } catch (e) {}
+      authToken = '';
+      localStorage.removeItem('prox_auth_token');
+      showToast('已安全退出后台');
+      showLoginModal(true);
+    }
+
+    async function changeAdminPassword() {
+      const oldPass = document.getElementById('adminOldPass')?.value.trim();
+      const newUser = document.getElementById('adminUserVal')?.value.trim();
+      const newPass = document.getElementById('adminNewPass')?.value.trim();
+
+      if (!oldPass) {
+        alert('请输入当前旧密码以验证身份！');
+        return;
+      }
+      if (!newPass || newPass.length < 3) {
+        alert('新密码至少需要3个字符！');
+        return;
+      }
+
+      try {
+        const res = await apiFetch('/api/auth/password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `old_pass=${encodeURIComponent(oldPass)}&new_user=${encodeURIComponent(newUser)}&new_pass=${encodeURIComponent(newPass)}`
+        });
+        const d = await res.json();
+        if (d.ok) {
+          if (d.token) {
+            authToken = d.token;
+            localStorage.setItem('prox_auth_token', authToken);
+          }
+          alert('✅ ' + d.msg);
+          document.getElementById('adminOldPass').value = '';
+          document.getElementById('adminNewPass').value = '';
+        } else {
+          alert('❌ ' + (d.msg || '修改失败'));
+        }
+      } catch (e) {
+        alert('请求失败: ' + e.message);
+      }
+    }
 
     function showToast(msg) {
       const t = document.getElementById('toast');
@@ -844,9 +1001,18 @@
 
     async function fetchStatus() {
       try {
-        const res = await fetch('/api/status');
+        const res = await apiFetch('/api/status');
         if (!res.ok) return;
         const data = await res.json();
+        if (data.auth) {
+          if (!data.auth.logged_in) {
+            showLoginModal(true);
+          } else {
+            showLoginModal(false);
+            const userInp = document.getElementById('adminUserVal');
+            if (userInp && !userInp.value) userInp.value = data.auth.user || 'admin';
+          }
+        }
         renderDashboard(data);
       } catch (e) {
         document.getElementById('headerStatusText').innerText = '失联 / 离线';
@@ -1094,7 +1260,7 @@
 
     async function triggerAction(action) {
       try {
-        const res = await fetch('/api/action/' + action, { method: 'POST' });
+        const res = await apiFetch('/api/action/' + action, { method: 'POST' });
         const d = await res.json();
         showToast(d.msg || '操作成功');
         fetchStatus();
@@ -1110,7 +1276,7 @@
       container.innerHTML = '<div style="text-align:center; padding:24px; color:var(--text-sub);">正在检索周边活跃的 BLE 广播信标...</div>';
 
       try {
-        const res = await fetch('/api/ble/devices');
+        const res = await apiFetch('/api/ble/devices');
         rawBleDevices = await res.json() || [];
         renderFilteredBleList();
       } catch (e) {
@@ -1122,7 +1288,7 @@
       const container = document.getElementById('bleDeviceList');
       container.innerHTML = '<div style="text-align:center; padding:24px; color:var(--text-sub);">正在清空历史扫描记录...</div>';
       try {
-        await fetch('/api/ble/clear', { method: 'POST' });
+        await apiFetch('/api/ble/clear', { method: 'POST' });
         showToast('已清空历史缓存，正在捕获最新广播');
         rawBleDevices = [];
         setTimeout(refreshBleDevices, 800);
@@ -1197,7 +1363,7 @@
 
       const finalName = customName.trim() || suggestName;
       try {
-        const res = await fetch('/api/ble/bind', {
+        const res = await apiFetch('/api/ble/bind', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: `mac=${encodeURIComponent(mac)}&name=${encodeURIComponent(finalName)}`
@@ -1214,7 +1380,7 @@
     async function unbindDevice() {
       if (!confirm('确定要解除当前设备的绑定吗？解除后电脑将不会自动触发锁屏。')) return;
       try {
-        const res = await fetch('/api/ble/unbind', { method: 'POST' });
+        const res = await apiFetch('/api/ble/unbind', { method: 'POST' });
         const d = await res.json();
         showToast(d.msg || '已解除绑定');
         refreshBleDevices();
@@ -1235,7 +1401,7 @@
 
     async function startPhonePairing() {
       try {
-        const res = await fetch('/api/ble/phone_pair/start', { method: 'POST' });
+        const res = await apiFetch('/api/ble/phone_pair/start', { method: 'POST' });
         const d = await res.json();
         showToast(d.msg || '手机配对广播已开启');
         fetchStatus();
@@ -1246,7 +1412,7 @@
 
     async function stopPhonePairing() {
       try {
-        const res = await fetch('/api/ble/phone_pair/stop', { method: 'POST' });
+        const res = await apiFetch('/api/ble/phone_pair/stop', { method: 'POST' });
         const d = await res.json();
         showToast(d.msg || '已退出手机配对模式');
         document.getElementById('incomingPairModal')?.classList.remove('active');
@@ -1260,7 +1426,7 @@
       const aliasInput = document.getElementById('modalDeviceAlias');
       const alias = (aliasInput ? aliasInput.value.trim() : '') || '我的随身手机';
       try {
-        const res = await fetch('/api/ble/phone_pair/confirm', {
+        const res = await apiFetch('/api/ble/phone_pair/confirm', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: 'name=' + encodeURIComponent(alias)
@@ -1276,7 +1442,7 @@
 
     async function rejectIncomingPair() {
       try {
-        await fetch('/api/ble/phone_pair/reject', { method: 'POST' });
+        await apiFetch('/api/ble/phone_pair/reject', { method: 'POST' });
       } catch (e) {}
       document.getElementById('incomingPairModal')?.classList.remove('active');
       showToast('已忽略本次连接');
@@ -1285,7 +1451,7 @@
 
     async function startPairMode() {
       try {
-        const res = await fetch('/api/ble/start_pair', { method: 'POST' });
+        const res = await apiFetch('/api/ble/start_pair', { method: 'POST' });
         const d = await res.json();
         showToast(d.msg || '贴近配对已启动，请将手表/手机贴近板子！');
         fetchStatus();
@@ -1340,7 +1506,7 @@
 
     async function loadSettings() {
       try {
-        const res = await fetch('/api/status');
+        const res = await apiFetch('/api/status');
         const data = await res.json();
         if (data.lock_rssi !== undefined) {
           document.getElementById('sliderLockRssi').value = data.lock_rssi;
@@ -1381,7 +1547,7 @@
         const unlockVal = parseInt(document.getElementById('sliderUnlockRssi').value);
         const timeoutVal = parseInt(document.getElementById('sliderTimeout').value);
         const autoUnlockVal = document.getElementById('autoUnlockToggle')?.checked ? '1' : '0';
-        const res = await fetch('/api/settings', {
+        const res = await apiFetch('/api/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: `clear_pwd=1&lock_rssi=${encodeURIComponent(lockVal)}&unlock_rssi=${encodeURIComponent(unlockVal)}&timeout_ms=${encodeURIComponent(timeoutVal)}&os_mode=${encodeURIComponent(currentOS)}&auto_unlock=${encodeURIComponent(autoUnlockVal)}`
@@ -1427,7 +1593,7 @@
         if (pwdVal.length > 0) {
           body += `&unlock_pwd=${encodeURIComponent(pwdVal)}`;
         }
-        const res = await fetch('/api/settings', {
+        const res = await apiFetch('/api/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: body
@@ -1453,7 +1619,7 @@
       select.innerHTML = '<option value="">正在快速扫描周边 WiFi (约需 1~2 秒)...</option>';
 
       try {
-        const res = await fetch('/api/wifi/scan');
+        const res = await apiFetch('/api/wifi/scan');
         const list = await res.json();
         if (!list || list.length === 0) {
           select.innerHTML = '<option value="">未找到 Wi-Fi 信号，请重试或直接在下方填写</option>';
@@ -1491,7 +1657,7 @@
       if (!confirm(`确认连接 Wi-Fi: [${ssid}]？配置保存后板子将尝试联网。`)) return;
 
       try {
-        const res = await fetch('/api/wifi/save', {
+        const res = await apiFetch('/api/wifi/save', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: `ssid=${encodeURIComponent(ssid)}&pass=${encodeURIComponent(pass)}`
@@ -1504,7 +1670,7 @@
         const checkTimer = setInterval(async () => {
           checkCount++;
           try {
-            const sRes = await fetch('/api/status');
+            const sRes = await apiFetch('/api/status');
             const sData = await sRes.json();
             renderDashboard(sData);
 
@@ -1526,7 +1692,7 @@
     async function resetWifi() {
       if (!confirm('确定要清除已保存的 Wi-Fi 凭证吗？板子将恢复为纯直连 AP 热点模式。')) return;
       try {
-        const res = await fetch('/api/wifi/reset', { method: 'POST' });
+        const res = await apiFetch('/api/wifi/reset', { method: 'POST' });
         const d = await res.json();
         showToast(d.msg || '已重置 Wi-Fi 配置');
         fetchStatus();
@@ -1537,7 +1703,7 @@
 
     async function toggleAp() {
       try {
-        const res = await fetch('/api/wifi/ap/toggle', { method: 'POST' });
+        const res = await apiFetch('/api/wifi/ap/toggle', { method: 'POST' });
         const d = await res.json();
         showToast(d.msg || '操作成功');
         fetchStatus();
@@ -1549,7 +1715,7 @@
     async function rebootSystem() {
       if (!confirm('确定要重启 ESP32-S3 吗？')) return;
       try {
-        await fetch('/api/system/reboot', { method: 'POST' });
+        await apiFetch('/api/system/reboot', { method: 'POST' });
         showToast('正在重启板子，请稍候约 5 秒后刷新网页...');
       } catch (e) {
         showToast('重启指令已发送');
