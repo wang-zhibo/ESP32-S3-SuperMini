@@ -1,5 +1,6 @@
 #include "wifi_manager.h"
 #include <esp_wifi.h>
+#include <esp_mac.h>
 
 WiFiManager WiFiMgr;
 
@@ -21,9 +22,9 @@ void WiFiManager::begin() {
     _ssid = _prefs.getString("sta_ssid", "");
     _pass = _prefs.getString("sta_pass", "");
 
-    // 自动根据 ESP32-S3 MAC 生成独立 AP 名称与唯一 mDNS 域名，例如 ProximityLock-70F8 / proximitylock-70f8.local
-    uint8_t mac[6];
-    WiFi.macAddress(mac);
+    // 核心优化：直接通过 ESP-IDF 硬件层读取芯片物理 MAC
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
     char buf[32];
     snprintf(buf, sizeof(buf), "ProximityLock-%02X%02X", mac[4], mac[5]);
     _apName = String(buf);

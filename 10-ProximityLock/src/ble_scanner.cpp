@@ -1,5 +1,6 @@
 #include "ble_scanner.h"
 #include <WiFi.h>
+#include <esp_mac.h>
 #include <algorithm>
 
 #if !defined(CONFIG_NIMBLE_ENABLED)
@@ -166,11 +167,12 @@ void BLETracker::begin() {
     _hasBondedCompanion = _prefs.getBool("comp_bonded", false);
     _hasBoundDevice = (_boundMAC.length() == 17) || _hasBondedCompanion;
 
-    // 自动根据芯片唯一 MAC 后 4 位生成专属蓝牙名 (如 ProximityLock-70F8 / ProximityLock-D7BA)，与板载 Wi-Fi 热点尾号完全一致，多设备同屋绝不混淆
-    uint8_t mac[6];
-    WiFi.macAddress(mac);
+    // 核心修复：直接通过 ESP-IDF 硬件层 esp_read_mac(ESP_MAC_BT) 读取出厂全球唯一的物理蓝牙 MAC
+    // 切勿在未开启 WiFi 前调用 WiFi.macAddress()，否则会因驱动未初始化而读取到栈残留伪随机值导致全设备同名！
+    uint8_t btMac[6] = {0};
+    esp_read_mac(btMac, ESP_MAC_BT);
     char nameBuf[32];
-    snprintf(nameBuf, sizeof(nameBuf), "ProximityLock-%02X%02X", mac[4], mac[5]);
+    snprintf(nameBuf, sizeof(nameBuf), "ProximityLock-%02X%02X", btMac[4], btMac[5]);
     _bleName = String(nameBuf);
 
     BLEDevice::init(_bleName.c_str());
