@@ -44,6 +44,14 @@ private:
     bool        _staWasConnected;
     uint32_t    _apNoClientStartMs;
     uint32_t    _nextRetryMs;
+
+    // Fast-Connect 快速直连缓存 (免扫 1~13 全信道，秒级直达路由器)
+    int32_t     _savedChannel;
+    uint8_t     _savedBSSID[6];
+    bool        _hasSavedBSSID;
+    bool        _useFastConnect;
+
+    void        startConnectSTA();
 };
 
 extern WiFiManager WiFiMgr;

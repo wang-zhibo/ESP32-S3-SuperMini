@@ -86,7 +86,8 @@ void saveRuntimeSettings(int lockRssi, int unlockRssi, uint32_t timeoutMs, Opera
 }
 
 void setup() {
-    setCpuFrequencyMhz(80); // 调频至 80MHz 极速节能档 (伴侣直连与USB完全绰绰有余，功耗发热直降约60%)
+    // 开机维持 240MHz 极速 Turbo 模式，加速 USB 枚举、BLE 初始化以及 WPA2 4-way 握手哈希计算
+    // 待 Wi-Fi 连通或 10 秒后自动降频至 80MHz 节能档
 
     // 优先初始化 USB HID 键盘复合总线 (抢先向主机发起总线物理重枚举)
     Locker.begin();
@@ -146,6 +147,15 @@ void loop() {
     // 3. Wi-Fi 与 Web 管理服务维护
     WiFiMgr.loop();
     WebServ.loop();
+
+    // 动态 CPU 调频策略：开机 240MHz 极速完成初始化与 Wi-Fi 握手，
+    // 连接成功或启动 10 秒后平滑降频至 80MHz 节能档，功耗降低约 60%
+    static bool s_cpuFrequencyLowered = false;
+    if (!s_cpuFrequencyLowered && (WiFiMgr.isConnected() || millis() >= 10000)) {
+        s_cpuFrequencyLowered = true;
+        setCpuFrequencyMhz(80);
+        Serial.printf("[系统] 启动就绪 (耗时 %lu ms)，CPU 调频至 80MHz 节能降温档.\n", millis());
+    }
 
     // 4. 硬件按键与裸板电容触控
     handleBootButton();
