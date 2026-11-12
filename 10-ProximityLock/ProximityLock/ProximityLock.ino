@@ -393,8 +393,8 @@ void updateLedFeedback() {
             period = 100; // 急促快闪：搜寻配对中
             break;
         case STATE_PRESENT:
-            // 在场时：平时熄灭，每 2.5 秒极短微闪 1 次表示在岗守护
-            if (now % 2500 < 50) {
+            // 在场时：平时熄灭，每 3 秒极短微闪 1 次表示在岗守护
+            if (now % 3000 < 50) {
                 digitalWrite(PIN_LED, HIGH);
             } else {
                 digitalWrite(PIN_LED, LOW);
